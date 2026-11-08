@@ -120,8 +120,9 @@ $('#lf').onsubmit = async e => {
   } catch (err) { $('#le').textContent = err.message; }
   b.disabled = false; b.textContent = 'Sign in';
 };
-$('#out').onclick = () => logout(false);
-$('#theme').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+const on = (s, f) => { const e = $(s); if (e) e.onclick = f; };
+on('#out', () => logout(false));
+on('#theme', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
 window.addEventListener('hashchange', () => sessionStorage.token && route());
 setTheme(localStorage.theme || 'dark');
 (async function boot() {

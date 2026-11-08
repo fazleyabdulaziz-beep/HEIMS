@@ -95,16 +95,3 @@ tbody tr{transition:background .2s,box-shadow .2s}tbody tr:hover{background:colo
  tr[data-open] td[data-l=""]{grid-area:3/1/4/4;justify-content:flex-start;gap:8px;padding-top:8px}tr[data-open] td[data-l=""]::before{display:none}
  .pg{padding:4px 2px}#toasts{left:12px;right:12px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
-/* ===== Dark mode colors only ===== */
-
-/* Top header bar */
-[data-theme=dark] header{
-  background:#080c14;            /* bar color */
-  border-bottom-color:#1c2a44;   /* thin line under the bar */
-}
-
-/* Login form box */
-[data-theme=dark] .login{
-  background:#080e18;            /* box color */
-  border-color:#1c2a44;          /* box border */
-}
