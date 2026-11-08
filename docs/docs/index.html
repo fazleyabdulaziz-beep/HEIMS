@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>HEIMS - Engineering Inventory</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src https://script.google.com https://script.googleusercontent.com; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<link rel="stylesheet" href="css/style.css"></head><body>
+<section id="login" hidden><div class="lg-art" aria-hidden="true"><svg viewBox="0 0 320 250" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="50" y="20" width="220" height="190"/><path d="M50 83h220M50 146h220"/><rect x="66" y="42" width="44" height="41"/><rect x="122" y="52" width="30" height="31"/><rect x="190" y="38" width="62" height="45"/><rect x="66" y="108" width="70" height="38"/><rect x="150" y="96" width="40" height="50"/><rect x="204" y="112" width="48" height="34"/><rect x="66" y="172" width="34" height="38"/><rect x="112" y="162" width="82" height="48"/><path d="M50 232h220M50 226v12M270 226v12M20 20v190M14 20h12M14 210h12" stroke-dasharray="none"/><text x="160" y="246" fill="currentColor" stroke="none" font-size="10" text-anchor="middle">RACK 1,3</text></svg><p>Every spare part, tool and consumable, counted and traceable.</p></div>
+<form id="lf" class="login"><div class="brand"><span class="mark"><svg viewBox="0 0 24 24"><path d="M4 21V3M20 21V3M4 8h16M4 15h16"/></svg></span><div><div class="logo">HEIMS</div><div class="mut sm">Hotel Engineering Inventory</div></div></div>
+  <h2>Sign in</h2>
+  <label for="lu">Username</label><input id="lu" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+  <label for="lp">Password</label><div class="pw"><input id="lp" type="password" autocomplete="current-password" required><button type="button" class="eye" id="eye" aria-label="Show password" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path class="sl" d="M3 3l18 18"/></svg></button></div>
+  <label class="chk"><input type="checkbox" id="lr"> Keep me signed in on this phone</label>
+  <div id="le" class="err" role="alert"></div><button class="btn" id="lb">Sign in</button></form></section>
+<div id="app" hidden>
+ <aside id="side"><div class="brand"><span class="mark"><svg viewBox="0 0 24 24"><path d="M4 21V3M20 21V3M4 8h16M4 15h16"/></svg></span><div><div class="logo">HEIMS</div><div id="hotel" class="mut"></div></div></div><nav class="nav">
+  <a href="#dashboard"><svg viewBox="0 0 24 24"><path d="M3 3h8v8H3zM13 3h8v5h-8zM13 10h8v11h-8zM3 13h8v8H3z"/></svg>Dashboard</a>
+  <a href="#inventory"><svg viewBox="0 0 24 24"><path d="M21 8l-9-5-9 5v8l9 5 9-5zM3 8l9 5 9-5M12 13v8"/></svg>Inventory</a>
+  <a href="#categories"><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>Categories</a>
+  <a href="#stockin" data-roles="ADMIN,SUPERVISOR,TECHNICIAN"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>Stock In</a>
+  <a href="#stockout" data-roles="ADMIN,SUPERVISOR,TECHNICIAN"><svg viewBox="0 0 24 24"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>Stock Out</a>
+  <a href="#adjust" data-roles="ADMIN,SUPERVISOR"><svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>Stock Adjustment</a>
+  <a href="#lowstock"><svg viewBox="0 0 24 24"><path d="M12 3l10 18H2zM12 10v5M12 18v.5"/></svg>Low Stock Alerts</a>
+  <a href="#history"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2"/></svg>Transaction History</a>
+  <a href="#racks"><svg viewBox="0 0 24 24"><path d="M3 4h18v6H3zM3 14h18v6H3zM7 7h.01M7 17h.01"/></svg>Rack Locations</a>
+  <a href="#settings"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2.4l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.7h4l.4-2.7a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg>Settings</a></nav></aside>
+ <div class="main"><header>
+  <button class="btn g ic" id="menu" aria-label="Menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+  <h1 id="title">Dashboard</h1><span class="sp"></span><span id="who" class="mut"></span>
+  <button class="btn g ic" id="theme" aria-label="Toggle theme"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/></svg></button>
+  <button class="btn g" id="out">Sign out</button></header>
+  <main id="view"></main></div></div>
+<div id="toasts"></div>
+<script src="js/config.js"></script><script src="js/api.js"></script><script src="js/forms.js"></script><script src="js/pages.js"></script><script src="js/admin.js"></script><script src="js/app.js"></script>
+</body></html>

@@ -49,4 +49,4 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') document.que
 // sign out automatically after 30 minutes without activity
 let _last = Date.now();
 ['click', 'keydown', 'touchstart'].forEach(ev => addEventListener(ev, () => _last = Date.now(), { passive: true }));
-setInterval(() => { if (sessionStorage.getItem('token') && Date.now() - _last > 30 * 60 * 1000) logout(true); }, 60000);
+setInterval(() => { if (sessionStorage.getItem('token') && !localStorage.rt && Date.now() - _last > 30 * 60 * 1000) logout(true); }, 60000);

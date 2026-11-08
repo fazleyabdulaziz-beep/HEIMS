@@ -4,12 +4,28 @@ const ST = { IN: ['In Stock', 'ok'], LOW: ['Low Stock', 'warn'], OUT: ['Out of S
 const badge = s => `<span class="b ${ST[s][1]}">${ST[s][0]}</span>`;
 const S = { items: [], cats: [], racks: [], loaded: false, f: { q: '', cat: '', rack: '', st: '', brand: '' }, page: 1 };
 const PER = 25;
+const imgUrl = (u, w) => String(u).replace(/sz=w\d+/, 'sz=w' + w);
+const NOPIC = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/></svg>';
+const thumb = i => i.ImageURL ? `<img class="th" loading="lazy" alt="" src="${esc(imgUrl(i.ImageURL, 160))}">` : `<span class="th ph0">${NOPIC}</span>`;
+document.addEventListener('error', e => { if (e.target.tagName === 'IMG') e.target.replaceWith(Object.assign(document.createElement('span'), { className: e.target.className + ' ph0', innerHTML: NOPIC })); }, true);
+function showItem(id) {
+  const i = (S.showArch ? S.archived : S.items).find(x => x.ItemID === id); if (!i) return;
+  const q = i.Quantity === '' ? 'Not counted yet' : i.Quantity + ' ' + i.Unit;
+  const rows = [['Category', i.Category], ['Subcategory', i.Subcategory], ['Brand / model', [i.Brand, i.Model].filter(Boolean).join(' / ')], ['Rack', i.Rack], ['In stock', q], ['Minimum level', i.MinStock], ['Description', i.Description], ['Remarks', i.Remarks]].filter(r => r[1] !== '' && r[1] != null);
+  const m = document.createElement('div'); m.className = 'ov';
+  m.innerHTML = `<div class="card md det"><div class="hero">${i.ImageURL ? `<img alt="${esc(i.Name)}" src="${esc(imgUrl(i.ImageURL, 1000))}">` : `<div class="noimg">${NOPIC}<span>No photo yet</span></div>`}</div>
+   <div class="dh"><div><h3>${esc(i.Name)}</h3><span class="id">${esc(i.ItemID)}</span></div>${badge(i.st)}</div>
+   <dl>${rows.map(r => `<dt>${r[0]}</dt><dd>${esc(r[1])}</dd>`).join('')}</dl><div class="mf"><button class="btn g" data-x>Close</button></div></div>`;
+  document.body.append(m); m.onclick = e => { if (e.target === m || e.target.dataset.x !== undefined) m.remove(); };
+}
 
 function toast(m, t = '') { const d = document.createElement('div'); d.className = 'toast ' + t; d.textContent = m; $('#toasts').append(d); setTimeout(() => d.remove(), 3500); }
 function setTheme(t) { document.documentElement.dataset.theme = t; localStorage.setItem('theme', t); }
 function logout(expired) {
-  if (!expired) api('logout').catch(() => {});
+  if (!expired) api('logout', { rt: localStorage.rt }).catch(() => {});
+  localStorage.removeItem('rt');
   sessionStorage.clear(); S.loaded = false; $('#app').hidden = true; $('#login').hidden = false;
+  $('#lu').value = localStorage.lu || ''; $('#lr').checked = !!localStorage.lu; $('#lp').value = '';
   if (expired) $('#le').textContent = 'Session expired. Please sign in again.';
 }
 function start() {
@@ -57,8 +73,8 @@ function drawTable() {
   const pages = Math.max(1, Math.ceil(rows.length / PER)); S.page = Math.min(S.page, pages);
   const cur = rows.slice((S.page - 1) * PER, S.page * PER);
   $('#tbl').innerHTML = !rows.length ? '<div class="card empty">No items match your filters.</div>' :
-    `<div class="card" style="padding:4px"><table><thead><tr><th>ID</th><th>Item</th><th>Category</th><th>Brand / Model</th><th>Rack</th><th class="n">Qty</th><th class="n">Min</th><th>Status</th>${A ? '<th></th>' : ''}</tr></thead><tbody>${cur.map(i => `<tr>
-    <td data-l="ID">${esc(i.ItemID)}</td><td data-l="Item"><b>${esc(i.Name)}</b></td><td data-l="Category">${esc(i.Category)}</td>
+    `<div class="card" style="padding:4px"><table><thead><tr><th>ID</th><th>Item</th><th>Category</th><th>Brand / Model</th><th>Rack</th><th class="n">Qty</th><th class="n">Min</th><th>Status</th>${A ? '<th></th>' : ''}</tr></thead><tbody>${cur.map(i => `<tr data-open="${esc(i.ItemID)}">
+    <td data-l="ID" class="id">${esc(i.ItemID)}</td><td data-l="Item" class="nm">${thumb(i)}<b>${esc(i.Name)}</b></td><td data-l="Category">${esc(i.Category)}</td>
     <td data-l="Brand / Model">${esc([i.Brand, i.Model].filter(Boolean).join(' / ') || '-')}</td><td data-l="Rack">${esc(i.Rack)}</td>
     <td data-l="Qty" class="n">${i.Quantity === '' ? '?' : esc(i.Quantity) + ' ' + esc(i.Unit)}</td><td data-l="Min" class="n">${esc(i.MinStock)}</td><td data-l="Status">${badge(i.st)}</td>${A ? `<td data-l="">${S.showArch ? `<button class="btn g sm" data-restore="${esc(i.ItemID)}">Restore</button>` : `<button class="btn g sm" data-edit="${esc(i.ItemID)}">Edit</button> <button class="btn g sm" data-arch="${esc(i.ItemID)}">Archive</button>`}</td>` : ''}</tr>`).join('')}</tbody></table></div>
     <div class="pg"><span class="mut">${rows.length} item(s) · page ${S.page}/${pages}</span><div><button class="btn g" data-p="-1" ${S.page < 2 ? 'disabled' : ''}>Prev</button><button class="btn g" data-p="1" ${S.page >= pages ? 'disabled' : ''}>Next</button></div></div>`;
@@ -74,7 +90,9 @@ async function route() {
   try { await V[k][1](); } catch (e) { $('#view').innerHTML = `<div class="card empty">${esc(e.message)}<br><br><button class="btn" id="retry">Retry</button></div>`; }
 }
 document.addEventListener('click', e => {
+  const row = e.target.closest('tr[data-open]'); if (row && !e.target.closest('button,a,input')) return showItem(row.dataset.open);
   const t = e.target.closest('button'); if (!t) return;
+  if (t.id === 'eye') { const p = $('#lp'), s = p.type === 'password'; p.type = s ? 'text' : 'password'; t.classList.toggle('on', s); t.setAttribute('aria-pressed', s); t.setAttribute('aria-label', s ? 'Hide password' : 'Show password'); }
   if (t.id === 'retry') route();
   if (t.id === 'clr') { S.f = { q: '', cat: '', rack: '', st: '', brand: '' }; S.page = 1; Object.keys(S.f).forEach(k => $('#f-' + k).value = ''); drawTable(); }
   if (t.dataset.p) { S.page += +t.dataset.p; drawTable(); }
@@ -83,10 +101,12 @@ document.addEventListener('input', e => {
   if (e.target.id?.startsWith('f-')) { S.f[e.target.id.slice(2)] = e.target.value; S.page = 1; drawTable(); }
 });
 $('#lf').onsubmit = async e => {
-  e.preventDefault(); const b = $('#lb'); b.disabled = true; b.textContent = 'Signing in…'; $('#le').textContent = '';
+  e.preventDefault(); const b = $('#lb'), rem = $('#lr').checked; b.disabled = true; b.textContent = 'Signing in…'; $('#le').textContent = '';
   try {
-    const r = await api('login', { username: $('#lu').value, password: $('#lp').value });
-    sessionStorage.token = r.token; sessionStorage.user = JSON.stringify(r.user); sessionStorage.hotel = r.hotel || ''; $('#lp').value = ''; start();
+    const un = $('#lu').value.trim(), r = await api('login', { username: un, password: $('#lp').value, remember: rem });
+    saveSession(r); $('#lp').value = '';
+    if (rem && r.rt) { localStorage.rt = r.rt; localStorage.lu = un; } else { localStorage.removeItem('rt'); localStorage.removeItem('lu'); }
+    start();
   } catch (err) { $('#le').textContent = err.message; }
   b.disabled = false; b.textContent = 'Sign in';
 };
@@ -95,4 +115,9 @@ $('#menu').onclick = () => $('#side').classList.toggle('open');
 $('#theme').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 window.addEventListener('hashchange', () => sessionStorage.token && route());
 setTheme(localStorage.theme || 'dark');
-sessionStorage.token && sessionStorage.user ? start() : ($('#login').hidden = false);
+(async function boot() {
+  if (localStorage.lu) { $('#lu').value = localStorage.lu; $('#lr').checked = true; }
+  if (sessionStorage.token && sessionStorage.user) return start();
+  if (localStorage.rt) { try { await resumeSession(); return start(); } catch (e) {} }
+  $('#login').hidden = false;
+})();
