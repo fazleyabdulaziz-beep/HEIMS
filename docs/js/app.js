@@ -19,6 +19,16 @@ function showItem(id) {
   document.body.append(m); m.onclick = e => { if (e.target === m || e.target.dataset.x !== undefined) m.remove(); };
 }
 
+function countUp() {
+  document.querySelectorAll('.kpi .v').forEach(el => { const to = Number(el.textContent.replace(/,/g, '')); if (!isFinite(to) || !to) return; const t0 = performance.now();
+    (function f(t) { const p = Math.min(1, (t - t0) / 800); el.textContent = Math.round(to * (1 - Math.pow(1 - p, 3))).toLocaleString(); if (p < 1) requestAnimationFrame(f); })(t0); });
+}
+function moveInd() {
+  const a = document.querySelector('.nav a.on'), i = $('#ind'); if (!a || !i || $('#app').hidden) return;
+  i.style.width = a.offsetWidth + 'px'; i.style.transform = `translateX(${a.offsetLeft}px)`;
+  a.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+}
+addEventListener('resize', moveInd);
 function toast(m, t = '') { const d = document.createElement('div'); d.className = 'toast ' + t; d.textContent = m; $('#toasts').append(d); setTimeout(() => d.remove(), 3500); }
 function setTheme(t) { document.documentElement.dataset.theme = t; localStorage.setItem('theme', t); }
 function logout(expired) {
@@ -51,7 +61,7 @@ async function vDash() {
     ${k.unverified ? `<p class="mut">${k.unverified} item(s) have no recorded quantity and need a physical count.</p>` : ''}</div>
    <div class="card"><h3>Low Stock Summary</h3>${d.lowList.map(i => `<div class="li"><span>${esc(i.name)}<br><small class="mut">${esc(i.id)} · ${esc(i.rack)}</small></span>${badge(i.st)}</div>`).join('') || em('No low or out-of-stock items. Set minimum stock levels to enable alerts.')}</div>
    <div class="card"><h3>Recent Inventory Activities</h3>${d.activity.map(r => `<div class="li"><span>${esc(r.Action)} <small class="mut">${esc(r.EntityID || r.After)}</small></span><small class="mut">${new Date(r.Timestamp).toLocaleString()}</small></div>`).join('') || em('No activity yet')}</div>
-   <div class="card"><h3>Top 10 Most Used Items</h3>${d.top.map(([n, v]) => `<div class="li"><span>${esc(n)}</span><b>${v}</b></div>`).join('') || em('No stock-out transactions yet')}</div></div>`;
+   <div class="card"><h3>Top 10 Most Used Items</h3>${d.top.map(([n, v]) => `<div class="li"><span>${esc(n)}</span><b>${v}</b></div>`).join('') || em('No stock-out transactions yet')}</div></div>`; countUp();
 }
 
 /* ---------- Inventory ---------- */
@@ -85,7 +95,7 @@ const V = { dashboard: ['Dashboard', vDash], inventory: ['Inventory', vInv], sto
 async function route() {
   let k = (location.hash || '#dashboard').slice(1); if (!V[k]) k = 'dashboard';
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.hash === '#' + k));
-  $('#title').textContent = V[k][0]; $('#side').classList.remove('open');
+  moveInd(); $('#title').textContent = V[k][0]; $('#side').classList.remove('open');
   $('#view').innerHTML = '<div class="load"><i></i>Loading…</div>';
   try { await V[k][1](); } catch (e) { $('#view').innerHTML = `<div class="card empty">${esc(e.message)}<br><br><button class="btn" id="retry">Retry</button></div>`; }
 }
@@ -111,7 +121,6 @@ $('#lf').onsubmit = async e => {
   b.disabled = false; b.textContent = 'Sign in';
 };
 $('#out').onclick = () => logout(false);
-$('#menu').onclick = () => $('#side').classList.toggle('open');
 $('#theme').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 window.addEventListener('hashchange', () => sessionStorage.token && route());
 setTheme(localStorage.theme || 'dark');
