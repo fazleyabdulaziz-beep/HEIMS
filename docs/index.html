@@ -3,15 +3,15 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>HEIMS - Engineering Inventory</title>
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src https://script.google.com https://script.googleusercontent.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
-<link rel="icon" href="logo.png"><link rel="stylesheet" href="css/style.css?v=5"></head><body>
-<section id="login" hidden><i class="orb o1"></i><i class="orb o2"></i><i class="orb o3"></i><form id="lf" class="login"><div class="brand"><img class="mark" src="logo.png" alt="HEIMS"><div><img class="wm" src="heims.png" alt="HEIMS"><div class="mut sm">Hotel Engineering Inventory</div></div></div>
+<link rel="icon" href="logo.png"><link rel="stylesheet" href="css/style.css?v=6"></head><body>
+<section id="login" hidden><button type="button" class="btn g sm" id="lt" aria-label="Switch light or dark mode"><span class="t-l"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/></svg>Light mode</span><span class="t-d"><svg viewBox="0 0 24 24"><path d="M21 13A9 9 0 1 1 11 3a7 7 0 0 0 10 10z"/></svg>Dark mode</span></button><i class="orb o1"></i><i class="orb o2"></i><i class="orb o3"></i><form id="lf" class="login"><div class="brand"><img class="mark lt" src="logo.png" alt="HEIMS"><img class="mark dk" src="logo-dark.png" alt="HEIMS"><div><img class="wm lt" src="heims.png" alt="HEIMS"><img class="wm dk" src="heims-dark.png" alt="HEIMS"><div class="mut sm">Hotel Engineering Inventory</div></div></div>
   <h2>Sign in</h2><p class="mut sm">Use your HEIMS account.</p>
   <label for="lu">Username</label><input id="lu" autocomplete="username" autocapitalize="none" spellcheck="false" required>
   <label for="lp">Password</label><div class="pw"><input id="lp" type="password" autocomplete="current-password" required><button type="button" class="eye" id="eye" aria-label="Show password" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/><path class="sl" d="M3 3l18 18"/></svg></button></div>
   <label class="chk"><input type="checkbox" id="lr"> Keep me signed in on this phone</label>
   <div id="le" class="err" role="alert"></div><button class="btn" id="lb">Sign in</button></form></section>
 <div id="app" hidden>
- <header><div class="brand"><img class="mark" src="logo.png" alt="HEIMS"><div><img class="wm" src="heims.png" alt="HEIMS"><div id="hotel"></div></div></div><span class="sp"></span><span id="who"></span>
+ <header><div class="brand"><img class="mark lt" src="logo.png" alt="HEIMS"><img class="mark dk" src="logo-dark.png" alt="HEIMS"><div><img class="wm lt" src="heims.png" alt="HEIMS"><img class="wm dk" src="heims-dark.png" alt="HEIMS"><div id="hotel"></div></div></div><span class="sp"></span><span id="who"></span>
   <button class="btn g ic" id="theme" aria-label="Toggle theme"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/></svg></button>
   <button class="btn g" id="out">Sign out</button></header>
  <aside id="side"><nav class="nav"><i id="ind"></i>
@@ -27,5 +27,5 @@
   <a href="#settings"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2.4l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.7h4l.4-2.7a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg>Settings</a></nav></aside>
  <div class="pagehead"><h1 id="title">Dashboard</h1></div><main id="view"></main></div>
 <div id="toasts"></div>
-<script src="js/config.js?v=5"></script><script src="js/api.js?v=5"></script><script src="js/forms.js?v=5"></script><script src="js/pages.js?v=5"></script><script src="js/admin.js?v=5"></script><script src="js/app.js?v=5"></script>
+<script src="js/config.js?v=6"></script><script src="js/api.js?v=6"></script><script src="js/forms.js?v=6"></script><script src="js/pages.js?v=6"></script><script src="js/admin.js?v=6"></script><script src="js/app.js?v=6"></script>
 </body></html>

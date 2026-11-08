@@ -122,6 +122,7 @@ $('#lf').onsubmit = async e => {
 };
 const on = (s, f) => { const e = $(s); if (e) e.onclick = f; };
 on('#out', () => logout(false));
+on('#lt', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
 on('#theme', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
 window.addEventListener('hashchange', () => sessionStorage.token && route());
 setTheme(localStorage.theme || 'dark');
