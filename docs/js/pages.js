@@ -43,7 +43,7 @@ async function vAudit() {
 /* ---------- Low stock ---------- */
 let LOW = [];
 async function vLow() {
-  await load(true);
+  await load(false);
   LOW = S.items.filter(i => i.st === 'LOW' || i.st === 'OUT').sort((a, b) => (b.MinStock - b.Quantity) - (a.MinStock - a.Quantity));
   const nomin = S.items.filter(i => !Number(i.MinStock)).length;
   $('#view').innerHTML = `<div class="top"><button class="btn" id="l-csv" ${LOW.length ? '' : 'disabled'}>Export CSV</button></div>` + (!LOW.length ? '<div class="card empty">All counted items are above their minimum level.</div>' :
@@ -54,7 +54,7 @@ async function vLow() {
 }
 
 /* ---------- Rack locations ---------- */
-async function vRacks() { await load(true); drawRacks(); }
+async function vRacks() { await load(false); drawRacks(); }
 function drawRacks() {
   const W = can('ADMIN', 'SUPERVISOR');
   const R = S.racks.map(r => { const it = S.items.filter(i => i.Rack === r); return { r, n: it.length, q: it.reduce((s, i) => s + (Number(i.Quantity) || 0), 0), low: it.filter(i => i.st === 'LOW' || i.st === 'OUT').length }; });
@@ -90,7 +90,6 @@ document.addEventListener('click', e => {
 /* ---------- Stock Orders ---------- */
 let ORDERS = [];
 async function vOrders() {
-  await load(true);
   ORDERS = await api('listOrders');
   const W = can('ADMIN', 'SUPERVISOR');
   const active = ORDERS.filter(o => !['RECEIVED','CANCELLED'].includes(o.Status)).length;
@@ -114,7 +113,8 @@ async function vOrders() {
    </tbody></table></div>
    <p class="mut">Orders do not increase inventory quantity until you record them as received. Partial receipts are supported.</p>`;
 }
-function createStockOrder() {
+async function createStockOrder() {
+  try { await load(false); } catch (e) { toast(e.message, 'bad'); return; }
   const opts = S.items.map(i => `<option value="${esc(i.ItemID)}">${esc(i.ItemID)} — ${esc(i.Name)} (${esc(i.Rack)})</option>`).join('');
   modal('Create Stock Order', `<div class="fg"><div><label>Inventory item *</label><select name="itemId" required>${opts}</select></div>
     ${fld('qty','Quantity ordered *','','type="number" min="0.01" step="any" required')}

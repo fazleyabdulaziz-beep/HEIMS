@@ -27,15 +27,25 @@ const API = { login: login_, logout: logout_, resume: resume_, uploadImage: uplo
 
 function doGet() { return ContentService.createTextOutput('HEIMS API OK'); }
 
+const READ_ACTIONS_ = ['inventory','dashboard','history','auditLog','listOrders','listUsers','getSettings'];
+function clearSheetCache_() {
+  const c = CacheService.getScriptCache();
+  ['ITEMS','TRANSACTIONS','CATEGORIES','LOCATIONS','AUDIT_LOG','SETTINGS','ORDERS'].forEach(n => c.remove('rows_' + n));
+}
 function doPost(e) {
-  let out;
+  let out, action = '';
   try {
-    const r = JSON.parse(e.postData.contents), fn = API[r.action];
+    const r = JSON.parse(e.postData.contents), fn = API[r.action]; action = r.action;
     if (!fn) throw new Error('Unknown action');
-    const user = ['login', 'resume'].includes(r.action) ? null : session_(r.token);
+    // Clear before writes so validation and calculations use current sheet contents.
+    if (action && READ_ACTIONS_.indexOf(action) < 0 && !['login','resume','logout'].includes(action)) clearSheetCache_();
+    const user = ['login', 'resume'].includes(action) ? null : session_(r.token);
     out = { ok: true, data: fn(r.payload || {}, user, r.token) };
   } catch (err) {
     out = { ok: false, error: err.message, code: err.code || 'ERR' };
+  } finally {
+    // Also invalidate after failed writes: some multi-step operations may have written before an error.
+    if (action && READ_ACTIONS_.indexOf(action) < 0 && !['login','resume','logout'].includes(action)) clearSheetCache_();
   }
   return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
 }
@@ -43,8 +53,21 @@ function doPost(e) {
 /* ---------- HELPERS ---------- */
 function sheet_(n) { return SpreadsheetApp.getActive().getSheetByName(n); }
 function rows_(n) {
+  // Cache read-only sheet snapshots briefly. USERS is deliberately excluded so account
+  // deactivation/role changes are checked against the live sheet on every request.
+  const cache = CacheService.getScriptCache(), key = 'rows_' + n;
+  if (n !== 'USERS') {
+    const saved = cache.get(key);
+    if (saved) { try { return JSON.parse(saved); } catch (e) { cache.remove(key); } }
+  }
   const v = sheet_(n).getDataRange().getValues(), h = v.shift();
-  return v.filter(r => r[0] !== '').map(r => Object.fromEntries(h.map((k, i) => [k, r[i] instanceof Date ? r[i].toISOString() : r[i]])));
+  const data = v.filter(r => r[0] !== '').map(r => Object.fromEntries(h.map((k, i) => [k, r[i] instanceof Date ? r[i].toISOString() : r[i]])));
+  if (n !== 'USERS') {
+    const packed = JSON.stringify(data);
+    // Apps Script cache entries have a size limit; skip oversized sheets safely.
+    if (packed.length < 95000) { try { cache.put(key, packed, 15); } catch (e) {} }
+  }
+  return data;
 }
 function setting_(k, d) { const r = rows_('SETTINGS').find(x => x.Key === k); return r ? r.Value : d; }
 function hash_(pw, salt) { return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, salt + pw)); }

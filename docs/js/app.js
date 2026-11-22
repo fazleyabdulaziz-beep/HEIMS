@@ -34,7 +34,7 @@ function setTheme(t) { document.documentElement.dataset.theme = t; localStorage.
 function logout(expired) {
   if (!expired) api('logout', { rt: localStorage.rt }).catch(() => {});
   localStorage.removeItem('rt');
-  sessionStorage.clear(); S.loaded = false; $('#app').hidden = true; $('#login').hidden = false;
+  sessionStorage.clear(); if (typeof clearApiCache === 'function') clearApiCache(); S.loaded = false; $('#app').hidden = true; $('#login').hidden = false;
   $('#lu').value = localStorage.lu || ''; $('#lr').checked = !!localStorage.lu; $('#lp').value = '';
   if (expired) $('#le').textContent = 'Session expired. Please sign in again.';
 }
@@ -66,7 +66,7 @@ async function vDash() {
 
 /* ---------- Inventory ---------- */
 async function vInv() {
-  S.showArch = false; await load(true);
+  S.showArch = false; await load(false);
   const o = (a, l) => `<option value="">${l}</option>` + a.map(x => `<option>${esc(x)}</option>`).join('');
   const brands = [...new Set(S.items.map(i => i.Brand).filter(Boolean))].sort();
   $('#view').innerHTML = `${can('ADMIN', 'SUPERVISOR') ? '<div class="top"><button class="btn g" id="arch">Show archived</button><button class="btn" id="add">+ Add Item</button></div>' : ''}<div class="bar"><input id="f-q" placeholder="Search Item ID or item name…">
@@ -99,6 +99,7 @@ async function route() {
   $('#view').innerHTML = '<div class="load"><i></i>Loading…</div>';
   try { await V[k][1](); } catch (e) { $('#view').innerHTML = `<div class="card empty">${esc(e.message)}<br><br><button class="btn" id="retry">Retry</button></div>`; }
 }
+
 document.addEventListener('click', e => {
   const row = e.target.closest('tr[data-open]'); if (row && !e.target.closest('button,a,input')) return showItem(row.dataset.open);
   const t = e.target.closest('button'); if (!t) return;

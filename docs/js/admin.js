@@ -3,7 +3,7 @@ const ROLES = ['ADMIN', 'SUPERVISOR', 'TECHNICIAN', 'VIEWER'];
 const pw = (n, l) => fld(n, l, '', 'type=password required autocomplete=new-password minlength=8');
 
 async function vCats() {
-  await load(true); const W = can('ADMIN', 'SUPERVISOR');
+  await load(false); const W = can('ADMIN', 'SUPERVISOR');
   const rows = S.cats.map(c => { const it = S.items.filter(i => i.Category === c); return { c, n: it.length, q: it.reduce((s, i) => s + (Number(i.Quantity) || 0), 0), low: it.filter(i => i.st === 'LOW' || i.st === 'OUT').length }; });
   $('#view').innerHTML = (W ? '<div class="top"><button class="btn" id="addcat">+ Add Category</button></div>' : '') +
    `<div class="card" style="padding:4px"><table><thead><tr><th>Category</th><th class="n">Items</th><th class="n">Total qty</th><th class="n">Low / out</th><th></th></tr></thead><tbody>${rows.map(r => `<tr>
