@@ -154,7 +154,7 @@ function openBulkQRPrint() {
     <input id="bulk-qr-search" type="search" placeholder="Search active item ID or name…" autocomplete="off">
     <div class="bulk-qr-tools"><button class="btn g sm" type="button" id="bulk-qr-select-visible">Select visible</button><button class="btn g sm" type="button" id="bulk-qr-clear">Clear selection</button><span class="mut sm" id="bulk-qr-count">0 selected</span></div>
     <div class="bulk-qr-list" id="bulk-qr-list"></div>
-    <div class="mf"><span class="mut sm">Only selected active items will be printed.</span><button class="btn" type="button" id="bulk-qr-print" disabled>Print selected QR labels</button></div>
+    <div class="mf"><span class="mut sm">Only selected active items will be printed.</span><button class="btn" type="button" id="bulk-qr-print" disabled>Download PDF (20 per A4)</button></div>
   </section>`;
   document.body.append(m);
   const list = m.querySelector('#bulk-qr-list');
@@ -185,7 +185,7 @@ async function makeBulkQRData(itemId) {
   const host = document.createElement('div'); host.className = 'bulk-qr-temp';
   document.body.append(host);
   try {
-    new QRCode(host, { text: `HEIMS:${itemId}`, width: 180, height: 180, colorDark: '#111827', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
+    new QRCode(host, { text: `HEIMS:${itemId}`, width: 600, height: 600, colorDark: '#000000', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
     await new Promise(resolve => setTimeout(resolve, 35));
     const canvas = host.querySelector('canvas'), img = host.querySelector('img');
     if (canvas) return canvas.toDataURL('image/png');
@@ -198,24 +198,88 @@ async function makeBulkQRData(itemId) {
 async function printBulkQRLabels(items, modalNode) {
   if (!items.length) return;
   if (typeof QRCode === 'undefined') { toast('QR generator unavailable. Check internet and refresh.', 'bad'); return; }
-  const btn = modalNode.querySelector('#bulk-qr-print'); btn.disabled = true; btn.textContent = 'Preparing labels…';
+  const JsPDF = window.jspdf && window.jspdf.jsPDF;
+  if (!JsPDF) { toast('PDF generator unavailable. Check internet and refresh.', 'bad'); return; }
+  const btn = modalNode.querySelector('#bulk-qr-print');
+  btn.disabled = true;
+  btn.textContent = 'Generating PDF…';
   try {
-    const labels = [];
-    for (const i of items) {
-      const src = await makeBulkQRData(i.ItemID);
-      labels.push(`<div class="print-qr-label"><img src="${src}" alt="QR code for ${esc(i.ItemID)}"><div><b>${esc(i.Name)}</b><strong>${esc(i.ItemID)}</strong><span>${esc(i.Rack || 'No rack assigned')}</span><small>HEIMS · Hotel Engineering</small></div></div>`);
+    const doc = new JsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
+    doc.setProperties({ title: 'HEIMS QR Inventory Labels', subject: 'Selected active inventory QR labels', author: 'HEIMS - Hotel Engineering' });
+
+    // A4: 4 columns x 5 rows = exactly 20 labels per page.
+    // Each QR is physically 15 x 15 mm, with only item name and item ID beside it.
+    const pageW = 210, pageH = 297;
+    const marginX = 7, marginY = 7;
+    const cols = 4, rows = 5;
+    const cellW = (pageW - marginX * 2) / cols;
+    const cellH = (pageH - marginY * 2) / rows;
+    const qrSize = 15;
+    const qrInsetX = 2.2;
+    const textGap = 1.8;
+    const textXOffset = qrInsetX + qrSize + textGap;
+    const textW = cellW - textXOffset - 2;
+
+    for (let index = 0; index < items.length; index++) {
+      if (index > 0 && index % (cols * rows) === 0) doc.addPage('a4', 'portrait');
+      const item = items[index];
+      const src = await makeBulkQRData(item.ItemID);
+      const slot = index % (cols * rows);
+      const col = slot % cols;
+      const row = Math.floor(slot / cols);
+      const x = marginX + col * cellW;
+      const y = marginY + row * cellH;
+
+      // Very light cut guide; dark text and QR remain high contrast.
+      doc.setDrawColor(220, 224, 230);
+      doc.setLineWidth(0.15);
+      doc.rect(x + 0.5, y + 0.5, cellW - 1, cellH - 1);
+
+      const qrX = x + qrInsetX;
+      const qrY = y + (cellH - qrSize) / 2;
+      doc.addImage(src, 'PNG', qrX, qrY, qrSize, qrSize, undefined, 'FAST');
+
+      const textX = x + textXOffset;
+      const maxTextW = textW;
+      const itemName = String(item.Name || 'Unnamed item');
+      const itemCode = String(item.ItemID || '');
+      let nameSize = 9.5;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(nameSize);
+      let nameLines = doc.splitTextToSize(itemName, maxTextW);
+      if (nameLines.length > 3) {
+        nameSize = 8.5;
+        doc.setFontSize(nameSize);
+        nameLines = doc.splitTextToSize(itemName, maxTextW);
+      }
+      if (nameLines.length > 4) nameLines = [...nameLines.slice(0, 3), `${nameLines[3].slice(0, Math.max(1, nameLines[3].length - 1))}…`];
+
+      const nameLineH = nameSize * 0.42;
+      const codeSize = 8.7;
+      const blockH = nameLines.length * nameLineH + 2.2 + codeSize * 0.42;
+      let textY = y + (cellH - blockH) / 2 + nameSize * 0.36;
+      doc.setTextColor(12, 18, 28);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(nameSize);
+      doc.text(nameLines, textX, textY, { lineHeightFactor: 1.08, maxWidth: maxTextW });
+
+      textY += nameLines.length * nameLineH + 2.2;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(codeSize);
+      doc.setTextColor(0, 0, 0);
+      const codeLines = doc.splitTextToSize(itemCode, maxTextW);
+      doc.text(codeLines.slice(0, 2), textX, textY, { lineHeightFactor: 1.05, maxWidth: maxTextW });
     }
-    let root = document.getElementById('qr-bulk-print-root'); if (root) root.remove();
-    root = document.createElement('div'); root.id = 'qr-bulk-print-root'; root.className = 'bulk-qr-print';
-    root.innerHTML = `<div class="bulk-qr-print-grid">${labels.join('')}</div>`;
-    document.body.append(root);
+
+    const dateTag = new Date().toISOString().slice(0, 10);
+    doc.save(`HEIMS-QR-Labels-${dateTag}.pdf`);
     modalNode.remove();
-    const cleanup = () => { root.remove(); window.removeEventListener('afterprint', cleanup); };
-    window.addEventListener('afterprint', cleanup);
-    setTimeout(() => window.print(), 180);
+    toast(`${items.length} active item QR labels exported to PDF.`, 'ok');
   } catch (err) {
-    toast(err.message || 'Could not prepare QR labels.', 'bad');
-    btn.disabled = false; btn.textContent = 'Print selected QR labels';
+    console.error('Bulk QR PDF error:', err);
+    toast(err.message || 'Could not generate QR PDF. Please try again.', 'bad');
+    btn.disabled = false;
+    btn.textContent = 'Download PDF (20 per A4)';
   }
 }
 
