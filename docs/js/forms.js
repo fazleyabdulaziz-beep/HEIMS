@@ -62,7 +62,7 @@ document.addEventListener('click', e => {
 });
 
 const MV = {
-  in: { t: 'Stock In', a: 'stockIn', f: [['qty', 'Quantity received', 'number', 1], ['supplier', 'Supplier'], ['ref', 'Reference number'], ['remarks', 'Remarks']] },
+  in: { t: 'Stock In', a: 'stockIn', f: [['qty', 'Quantity received', 'number', 1], ['remarks', 'Remarks']] },
   out: { t: 'Stock Out', a: 'stockOut', f: [['qty', 'Quantity taken', 'number', 1], ['staff', 'Staff name / ID', 'text', 1], ['dept', 'Location used (room no. or area)', 'text', 1], ['remarks', 'Remarks']] },
   adj: { t: 'Stock Adjustment', a: 'adjustStock', f: [['newQty', 'Counted quantity', 'number', 1], ['reason', 'Reason for adjustment', 'text', 1]] }
 };

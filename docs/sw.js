@@ -1,7 +1,7 @@
-const CACHE = 'heims-shell-v3';
-const SHELL = ['./', './index.html', './manifest.webmanifest', './css/style.css?v=10',
-  './js/config.js?v=10', './js/api.js?v=10', './js/pwa.js?v=1', './js/forms.js?v=10', './js/pages.js?v=10',
-  './js/admin.js?v=10', './js/qr.js?v=1', './js/app.js?v=10', './pwa-192.png', './pwa-512.png',
+const CACHE = 'heims-shell-v5-stockcheck';
+const SHELL = ['./', './index.html', './manifest.webmanifest', './css/style.css?v=11',
+  './js/config.js?v=10', './js/api.js?v=11', './js/pwa.js?v=1', './js/forms.js?v=11', './js/pages.js?v=10',
+  './js/admin.js?v=10', './js/qr.js?v=3', './js/app.js?v=10', './pwa-192.png', './pwa-512.png',
   './logo.png', './logo-dark.png', './heims.png', './heims-dark.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -10,7 +10,8 @@ const HEAD = {
   USERS: ['Username','Name','Role','PasswordHash','Salt','Active','CreatedAt'],
   AUDIT_LOG: ['AuditID','Timestamp','User','Action','Entity','EntityID','Before','After'],
   SETTINGS: ['Key','Value'],
-  ORDERS: ['OrderID','CreatedAt','ItemID','ItemName','QtyOrdered','QtyReceived','Unit','Supplier','Reference','ExpectedDate','Notes','Status','CreatedBy','UpdatedAt','UpdatedBy']
+  ORDERS: ['OrderID','CreatedAt','ItemID','ItemName','QtyOrdered','QtyReceived','Unit','Supplier','Reference','ExpectedDate','Notes','Status','CreatedBy','UpdatedAt','UpdatedBy'],
+  STOCK_CHECKS: ['CheckID','Timestamp','ItemID','ItemName','SystemQty','CountedQty','Variance','IdentityMatch','Notes','CheckedBy','Result']
 };
 const CATS = ['Plumbing Spare Parts','Electrical Spare Parts','ACMV / HVAC Components','Lighting Components','Tools & Measuring Instruments','Consumables','General Maintenance','Door Hardware & Accessories'];
 const RACKS = ['1,1','1,2','1,3','1,4','1,5','1,6','2,1','2,2','2,3','2,4','3,1','3,2','3,3','3,4'];
@@ -22,7 +23,7 @@ const API = { login: login_, logout: logout_, resume: resume_, uploadImage: uplo
   addLocation: addLocation_, transferItems: transferItems_, history: history_, auditLog: auditLog_,
   changePassword: changePassword_, listUsers: listUsers_, saveUser: saveUser_, resetPassword: resetPassword_,
   addCategory: addCategory_, renameCategory: renameCategory_, getSettings: getSettings_, saveSettings: saveSettings_,
-  listOrders: listOrders_, createOrder: createOrder_, receiveOrder: receiveOrder_, cancelOrder: cancelOrder_,
+  listOrders: listOrders_, createOrder: createOrder_, receiveOrder: receiveOrder_, cancelOrder: cancelOrder_, recordStockCheck: recordStockCheck_,
   stockIn: (p, u) => move_(p, u, 'STOCK_IN'), stockOut: (p, u) => move_(p, u, 'STOCK_OUT'), adjustStock: (p, u) => move_(p, u, 'ADJUSTMENT') };
 
 function doGet() { return ContentService.createTextOutput('HEIMS API OK'); }
@@ -264,6 +265,29 @@ function archiveItem_(p, u) {                    // soft delete: row and history
     return true;
   });
 }
+function recordStockCheck_(p, u) {
+  // Physical verification is restricted to the inventory owner roles. It records findings only;
+  // it never changes the live stock quantity automatically.
+  need_(u, WRITE);
+  return locked_(p, () => {
+    const it = item_(clean_(p.itemId, 40, true, 'Item ID'));
+    if (it.o.Status !== 'ACTIVE') throw new Error('Item is archived');
+    const counted = num_(p.countedQty, 'Physical counted quantity', 0);
+    const identity = String(p.identityMatch || '').toUpperCase();
+    if (!['YES', 'NO'].includes(identity)) throw new Error('Please confirm whether the physical item matches the system');
+    const systemQty = it.o.Quantity === '' ? '' : Number(it.o.Quantity);
+    const variance = systemQty === '' ? '' : Math.round((counted - systemQty) * 100) / 100;
+    const result = identity === 'NO' ? 'ITEM_MISMATCH' : (systemQty === '' ? 'SYSTEM_QTY_UNVERIFIED' : (variance === 0 ? 'MATCHED' : 'QTY_VARIANCE'));
+    const id = nextId_('STOCK_CHECKS', 'CHK-', 6);
+    sheet_('STOCK_CHECKS').appendRow([id, new Date(), it.o.ItemID, it.o.Name, systemQty, counted, variance, identity,
+      clean_(p.notes, 300), u.username, result]);
+    audit_(u, 'STOCK_CHECKED', it.o.ItemID,
+      { systemQty: systemQty, itemName: it.o.Name },
+      { countedQty: counted, variance: variance, identityMatch: identity, result: result, checkId: id }, 'STOCK_CHECK');
+    return { checkId: id, itemId: it.o.ItemID, itemName: it.o.Name, systemQty: systemQty, countedQty: counted, variance: variance, identityMatch: identity, result: result };
+  });
+}
+
 function move_(p, u, type) {                     // STOCK_IN | STOCK_OUT | ADJUSTMENT
   need_(u, type === 'ADJUSTMENT' ? WRITE : MOVE);
   return locked_(p, () => {
@@ -486,6 +510,16 @@ function upgradeOrdersSheet() {
   sh.getRange(1, 1, 1, HEAD.ORDERS.length).setValues([HEAD.ORDERS]).setFontWeight('bold');
   sh.setFrozenRows(1);
   return 'ORDERS sheet created. Stock Orders is ready.';
+}
+
+// Run once in Apps Script editor to add the physical stock verification log. Existing sheets/data are untouched.
+function upgradeStockChecksSheet() {
+  const ss = SpreadsheetApp.getActive();
+  if (ss.getSheetByName('STOCK_CHECKS')) return 'STOCK_CHECKS sheet already exists.';
+  const sh = ss.insertSheet('STOCK_CHECKS');
+  sh.getRange(1, 1, 1, HEAD.STOCK_CHECKS.length).setValues([HEAD.STOCK_CHECKS]).setFontWeight('bold');
+  sh.setFrozenRows(1);
+  return 'STOCK_CHECKS sheet created. QR Stock Check is ready.';
 }
 
 function setup() {

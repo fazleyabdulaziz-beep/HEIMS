@@ -95,10 +95,42 @@ async function onQRDecoded(raw) {
 }
 
 function showQRItemResult(i) {
+  // A scan/search result is shown as a focused pop-up so technicians can identify
+  // the physical spare part by its photo before recording a movement.
+  document.querySelectorAll('.qr-item-overlay').forEach(el => el.remove());
   const quantity = i.Quantity === '' ? 'Not counted' : `${esc(i.Quantity)} ${esc(i.Unit)}`;
-  $('#qr-item-result').innerHTML = `<div class="card qr-found"><div class="qr-found-main"><div><span class="b ok">ITEM FOUND</span><h3>${esc(i.Name)}</h3><span class="id">${esc(i.ItemID)}</span></div>${badge(i.st)}</div>
-    <div class="qr-details"><span><small class="mut">Current quantity</small><b>${quantity}</b></span><span><small class="mut">Rack / location</small><b>${esc(i.Rack || '-')}</b></span><span><small class="mut">Category</small><b>${esc(i.Category || '-')}</b></span><span><small class="mut">Minimum stock</small><b>${esc(i.MinStock ?? 0)} ${esc(i.Unit || '')}</b></span></div>
-    <div class="qr-actions"><button class="btn" data-qr-move="in" data-item="${esc(i.ItemID)}">Stock In</button><button class="btn" data-qr-move="out" data-item="${esc(i.ItemID)}">Stock Out</button><button class="btn g" data-qr-label="${esc(i.ItemID)}">Print QR Label</button></div></div>`;
+  const image = i.ImageURL
+    ? `<img class="qr-item-photo" src="${esc(imgUrl(i.ImageURL, 1000))}" alt="${esc(i.Name)}">`
+    : `<div class="qr-item-photo qr-item-no-photo">${NOPIC}<span>No item photo</span></div>`;
+  const overlay = document.createElement('div');
+  overlay.className = 'ov qr-item-overlay';
+  overlay.innerHTML = `<section class="card qr-found-modal" role="dialog" aria-modal="true" aria-label="Found inventory item">
+    <div class="qr-pop-head"><span class="b ok">ITEM FOUND</span><button class="btn g sm" type="button" data-qr-close aria-label="Close item details">✕</button></div>
+    ${image}
+    <div class="qr-pop-body"><div class="qr-found-main"><div><h3>${esc(i.Name)}</h3><span class="id">${esc(i.ItemID)}</span></div>${badge(i.st)}</div>
+      <div class="qr-details"><span><small class="mut">Current quantity</small><b>${quantity}</b></span><span><small class="mut">Rack / location</small><b>${esc(i.Rack || '-')}</b></span><span><small class="mut">Category</small><b>${esc(i.Category || '-')}</b></span><span><small class="mut">Minimum stock</small><b>${esc(i.MinStock ?? 0)} ${esc(i.Unit || '')}</b></span></div>
+      <div class="qr-actions"><button class="btn" data-qr-move="in" data-item="${esc(i.ItemID)}">Stock In</button><button class="btn" data-qr-move="out" data-item="${esc(i.ItemID)}">Stock Out</button>${can('ADMIN','SUPERVISOR') ? `<button class="btn g qr-check-btn" data-qr-stock-check="${esc(i.ItemID)}">Stock Check</button>` : ''}<button class="btn g" data-qr-label="${esc(i.ItemID)}">Print QR Label</button></div>
+    </div></section>`;
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay || e.target.closest('[data-qr-close]')) overlay.remove();
+  });
+  document.body.append(overlay);
+  $('#qr-item-result').innerHTML = '';
+}
+
+function openQRStockCheck(itemId) {
+  if (!can('ADMIN', 'SUPERVISOR')) { toast('Only Admin or Supervisor can record a stock check.', 'bad'); return; }
+  const i = S.items.find(x => x.ItemID === itemId);
+  if (!i) { toast('Item not found. Refresh inventory and scan again.', 'bad'); return; }
+  const systemQty = i.Quantity === '' ? 'Not counted in system' : `${esc(i.Quantity)} ${esc(i.Unit || '')}`;
+  modal('Physical Stock Check', `<div class="qr-check-item">${i.ImageURL ? `<img src="${esc(imgUrl(i.ImageURL, 240))}" alt="${esc(i.Name)}">` : `<div class="qr-check-no-photo">${NOPIC}</div>`}<div><b>${esc(i.Name)}</b><small class="mut">${esc(i.ItemID)} · ${esc(i.Rack || '-')}</small><small class="mut">System quantity: <strong>${systemQty}</strong></small></div></div>
+    <p class="mut sm">Physically inspect the spare part and count the actual quantity. This check records a report only; it will not change stock balance.</p>
+    <div class="fg">${fld('countedQty', `Physical quantity counted (${esc(i.Unit || 'units')}) *`, '', 'type=number min=0 step=any required')}${sel('identityMatch', 'Does the real item match the system name / photo / model? *', ['YES','NO'], 'YES')}${fld('notes', 'Remarks (optional)', '', 'maxlength=300')}</div>`, 'Save Stock Check', async d => {
+      const r = await api('recordStockCheck', { itemId: i.ItemID, countedQty: d.countedQty, identityMatch: d.identityMatch, notes: d.notes, rid: rid() });
+      const varianceText = r.variance === '' ? 'System quantity has not been verified yet.' : (Number(r.variance) === 0 ? 'Physical quantity matches system.' : `Quantity difference: ${r.variance} ${i.Unit || ''}.`);
+      const label = r.result === 'MATCHED' ? 'MATCHED' : r.result === 'ITEM_MISMATCH' ? 'ITEM MISMATCH' : r.result === 'QTY_VARIANCE' ? 'QUANTITY VARIANCE' : 'SYSTEM QTY UNVERIFIED';
+      toast(`Stock check saved: ${label}. ${varianceText}`, r.result === 'MATCHED' ? 'ok' : 'bad');
+    });
 }
 
 function drawQRSearch() {
@@ -143,7 +175,9 @@ function printQRLabel(i, codeNode) {
 document.addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.qrOpen) { const i = S.items.find(x => x.ItemID === b.dataset.qrOpen); if (i) showQRItemResult(i); }
+  if (b.dataset.qrStockCheck) { document.querySelectorAll('.qr-item-overlay').forEach(el => el.remove()); openQRStockCheck(b.dataset.qrStockCheck); return; }
   if (b.dataset.qrMove) {
+    document.querySelectorAll('.qr-item-overlay').forEach(el => el.remove());
     const id = b.dataset.item; window.QR_SELECTED_ITEM = id;
     location.hash = b.dataset.qrMove === 'in' ? '#stockin' : '#stockout';
   }
