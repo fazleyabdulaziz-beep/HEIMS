@@ -174,18 +174,57 @@ function openQRMoveModal(itemId, kind) {
       : '<p class="mut sm">Record the quantity received into inventory.</p>';
 
   modal(cfg.title, `${summary}${helper}<div class="fg">${fields}</div>`, `Confirm ${cfg.title}`, async data => {
+    const previousQty = Number(i.Quantity || 0);
     await api(cfg.action, { ...data, itemId: i.ItemID, rid: rid() });
-    toast(`${cfg.title} recorded successfully.`, 'ok');
-    // The stock movement is already committed. A failed refresh must not leave
-    // the form open and invite a second submission of the same movement.
+    // The movement is committed. Refresh first so the confirmation popup shows
+    // the authoritative balance returned by the inventory API.
     try {
       await load(true);
       const updated = S.items.find(x => x.ItemID === i.ItemID);
-      if (updated) showQRItemResult(updated);
+      if (updated && (kind === 'in' || kind === 'out')) {
+        showQRMoveSuccess(updated, kind, previousQty);
+      } else if (updated) {
+        showQRItemResult(updated);
+        toast(`${cfg.title} recorded successfully.`, 'ok');
+      }
     } catch (refreshError) {
-      toast('Movement saved, but inventory could not refresh. Reload HEIMS to see the latest balance.', 'bad');
+      if (kind === 'in' || kind === 'out') {
+        showQRMoveSuccess({ ...i, Quantity: '' }, kind, previousQty, true);
+      } else {
+        toast('Movement saved, but inventory could not refresh. Reload HEIMS to see the latest balance.', 'bad');
+      }
     }
   }, 'qr-move-overlay');
+}
+
+function showQRMoveSuccess(item, kind, previousQty, refreshFailed = false) {
+  const isIn = kind === 'in';
+  const balance = item.Quantity === '' || item.Quantity == null
+    ? 'Unavailable'
+    : `${esc(item.Quantity)} ${esc(item.Unit || '')}`;
+  const overlay = document.createElement('div');
+  overlay.className = 'ov qr-move-success-overlay';
+  overlay.innerHTML = `<section class="card qr-move-success" role="dialog" aria-modal="true" aria-label="${isIn ? 'Stock In successful' : 'Stock Out successful'}">
+    <button class="btn g sm qr-success-close" type="button" data-success-close aria-label="Close">✕</button>
+    <div class="qr-success-mark" aria-hidden="true"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="27"></circle><path d="m19 33 9 9 18-20"></path></svg></div>
+    <span class="qr-success-kicker">${isIn ? 'STOCK IN' : 'STOCK OUT'}</span>
+    <h3>${isIn ? 'Stock In Successfully!' : 'Stock Out Successfully!'}</h3>
+    <p class="mut sm">${esc(item.Name)} · ${esc(item.ItemID)}</p>
+    <div class="qr-success-balance"><small>Current stock balance</small><strong>${balance}</strong><span>${esc(item.Rack || 'No rack assigned')}</span></div>
+    ${refreshFailed ? '<p class="dash-note">The movement was saved, but the latest balance could not be loaded. Please reload HEIMS to verify the current stock.</p>' : '<p class="mut sm">Inventory balance has been refreshed successfully.</p>'}
+    <button class="btn qr-success-done" type="button" data-success-close>Done</button>
+  </section>`;
+  const close = () => {
+    overlay.remove();
+    if (!refreshFailed) {
+      const latest = S.items.find(x => x.ItemID === item.ItemID);
+      if (latest) showQRItemResult(latest);
+    }
+  };
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay || e.target.closest('[data-success-close]')) close();
+  });
+  document.body.append(overlay);
 }
 
 function openQRStockCheck(itemId) {
