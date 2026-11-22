@@ -17,3 +17,9 @@
 - The existing sign-in device token expires after 30 days and is revoked by Sign out, password reset, or account deactivation.
 - If this is a brand-new HEIMS spreadsheet, run the normal `setup` function instead; it creates the `ORDERS` tab automatically. Do not run `setup` on an existing production spreadsheet.
 \n\n## PWA Install App button (added)\n- Added an Install App button in the HEIMS header.\n- Added a web app manifest, 192px/512px icons, and a service worker for app-shell offline loading.\n- On supported browsers, the button opens the native install prompt. On iPhone/iPad, it explains Safari → Share → Add to Home Screen.\n- Deploy the complete updated `docs` folder to GitHub Pages over HTTPS. After deployment, refresh HEIMS once; the install option may take a reload or two to become available depending on the browser.\n
+
+## Bulk QR PDF — 24 labels per A4
+- Changed the PDF layout to 4 columns × 6 rows (24 labels per A4 page).
+- Each QR remains 15 × 15 mm, with item name and item code alongside.
+- Archived items remain excluded because bulk printing uses active inventory only.
+- Deploy the updated `docs` folder to GitHub Pages. No Apps Script redeployment is required. Print at Actual Size / 100%.

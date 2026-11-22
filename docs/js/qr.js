@@ -154,7 +154,7 @@ function openBulkQRPrint() {
     <input id="bulk-qr-search" type="search" placeholder="Search active item ID or name…" autocomplete="off">
     <div class="bulk-qr-tools"><button class="btn g sm" type="button" id="bulk-qr-select-visible">Select visible</button><button class="btn g sm" type="button" id="bulk-qr-clear">Clear selection</button><span class="mut sm" id="bulk-qr-count">0 selected</span></div>
     <div class="bulk-qr-list" id="bulk-qr-list"></div>
-    <div class="mf"><span class="mut sm">Only selected active items will be printed.</span><button class="btn" type="button" id="bulk-qr-print" disabled>Download PDF (20 per A4)</button></div>
+    <div class="mf"><span class="mut sm">Only selected active items will be printed.</span><button class="btn" type="button" id="bulk-qr-print" disabled>Download PDF (24 per A4)</button></div>
   </section>`;
   document.body.append(m);
   const list = m.querySelector('#bulk-qr-list');
@@ -207,11 +207,11 @@ async function printBulkQRLabels(items, modalNode) {
     const doc = new JsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
     doc.setProperties({ title: 'HEIMS QR Inventory Labels', subject: 'Selected active inventory QR labels', author: 'HEIMS - Hotel Engineering' });
 
-    // A4: 4 columns x 5 rows = exactly 20 labels per page.
+    // A4: 4 columns x 6 rows = exactly 24 labels per page.
     // Each QR is physically 15 x 15 mm, with only item name and item ID beside it.
     const pageW = 210, pageH = 297;
     const marginX = 7, marginY = 7;
-    const cols = 4, rows = 5;
+    const cols = 4, rows = 6;
     const cellW = (pageW - marginX * 2) / cols;
     const cellH = (pageH - marginY * 2) / rows;
     const qrSize = 15;
@@ -279,7 +279,7 @@ async function printBulkQRLabels(items, modalNode) {
     console.error('Bulk QR PDF error:', err);
     toast(err.message || 'Could not generate QR PDF. Please try again.', 'bad');
     btn.disabled = false;
-    btn.textContent = 'Download PDF (20 per A4)';
+    btn.textContent = 'Download PDF (24 per A4)';
   }
 }
 
