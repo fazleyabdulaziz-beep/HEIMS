@@ -91,7 +91,7 @@ function drawTable() {
 }
 
 /* ---------- Router & events ---------- */
-const V = { dashboard: ['Dashboard', vDash], inventory: ['Inventory', vInv], stockin: ['Stock In', () => vMove('in')], stockout: ['Stock Out', () => vMove('out')], adjust: ['Stock Adjustment', () => vMove('adj')], lowstock: ['Low Stock Alerts', vLow], history: ['Transaction History', vHist], audit: ['Audit Log', vAudit], racks: ['Rack Locations', vRacks], categories: ['Categories', vCats], settings: ['Settings', vSettings] };
+const V = { dashboard: ['Dashboard', vDash], inventory: ['Inventory', vInv], stockin: ['Stock In', () => vMove('in')], stockout: ['Stock Out', () => vMove('out')], adjust: ['Stock Adjustment', () => vMove('adj')], lowstock: ['Low Stock Alerts', vLow], history: ['Transaction History', vHist], audit: ['Audit Log', vAudit], racks: ['Rack Locations', vRacks], categories: ['Categories', vCats], settings: ['Settings', vSettings], orders: ['Stock Orders', vOrders] };
 async function route() {
   let k = (location.hash || '#dashboard').slice(1); if (!V[k]) k = 'dashboard';
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.hash === '#' + k));
@@ -113,9 +113,9 @@ document.addEventListener('input', e => {
 $('#lf').onsubmit = async e => {
   e.preventDefault(); const b = $('#lb'), rem = $('#lr').checked; b.disabled = true; b.textContent = 'Signing in…'; $('#le').textContent = '';
   try {
-    const un = $('#lu').value.trim(), r = await api('login', { username: un, password: $('#lp').value, remember: rem });
+    const un = $('#lu').value.trim(), r = await api('login', { username: un, password: $('#lp').value, remember: true });
     saveSession(r); $('#lp').value = '';
-    if (rem && r.rt) { localStorage.rt = r.rt; localStorage.lu = un; } else { localStorage.removeItem('rt'); localStorage.removeItem('lu'); }
+    if (r.rt) { localStorage.rt = r.rt; localStorage.lu = un; }
     start();
   } catch (err) { $('#le').textContent = err.message; }
   b.disabled = false; b.textContent = 'Sign in';

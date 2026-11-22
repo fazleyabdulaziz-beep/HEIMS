@@ -101,3 +101,7 @@ tbody tr{transition:background .2s,box-shadow .2s}tbody tr:hover{background:colo
 #lt{position:absolute;top:16px;right:16px;z-index:2;border-radius:99px;padding:0 14px}
 #lt span{display:inline-flex;gap:7px;align-items:center}#lt svg{width:16px;height:16px}
 [data-theme=dark] .t-d,[data-theme=light] .t-l{display:none}
+
+/* PWA install action */
+#installApp{white-space:nowrap;min-height:36px;padding:6px 11px}
+@media(max-width:420px){#installApp{font-size:11px;padding:5px 8px;min-height:34px}}

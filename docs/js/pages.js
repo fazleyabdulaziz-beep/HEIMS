@@ -86,3 +86,59 @@ document.addEventListener('click', e => {
     api('transferItems', { itemIds: ids, toRack: $('#rk-to').value, rid: rid() }).then(async r => { toast(r.moved + ' item(s) moved'); await load(true); drawRacks(); }).catch(x => { toast(x.message, 'bad'); b.disabled = false; });
   }
 });
+
+/* ---------- Stock Orders ---------- */
+let ORDERS = [];
+async function vOrders() {
+  await load(true);
+  ORDERS = await api('listOrders');
+  const W = can('ADMIN', 'SUPERVISOR');
+  const active = ORDERS.filter(o => !['RECEIVED','CANCELLED'].includes(o.Status)).length;
+  $('#view').innerHTML = `<div class="kpis">
+    <div class="card kpi"><span class="mut">Total orders</span><div class="v">${ORDERS.length}</div></div>
+    <div class="card kpi warn"><span class="mut">Awaiting / partial</span><div class="v">${active}</div></div>
+    <div class="card kpi"><span class="mut">Fully received</span><div class="v">${ORDERS.filter(o => o.Status === 'RECEIVED').length}</div></div>
+   </div>
+   ${W ? `<div class="top"><button class="btn" id="ord-add">+ Create Stock Order</button></div>` : ''}
+   <div class="card" style="padding:4px"><table><thead><tr><th>Order ID</th><th>Item</th><th>Supplier</th><th class="n">Ordered</th><th class="n">Received</th><th>Expected</th><th>Status</th><th>Action</th></tr></thead><tbody>
+   ${ORDERS.map(o => {
+     const rem = Math.max(0, Number(o.QtyOrdered) - Number(o.QtyReceived));
+     const cls = o.Status === 'RECEIVED' ? 'ok' : o.Status === 'CANCELLED' ? 'mut' : o.Status === 'PARTIAL' ? 'warn' : 'warn';
+     return `<tr><td data-l="Order"><b>${esc(o.OrderID)}</b><br><small class="mut">${o.CreatedAt ? esc(fdt(o.CreatedAt)) : ''}</small></td>
+       <td data-l="Item"><b>${esc(o.ItemName)}</b><br><small class="mut">${esc(o.ItemID)}</small></td>
+       <td data-l="Supplier">${esc(o.Supplier || '-')}<br><small class="mut">${esc(o.Reference || '')}</small></td>
+       <td data-l="Ordered" class="n">${esc(o.QtyOrdered)} ${esc(o.Unit)}</td><td data-l="Received" class="n">${esc(o.QtyReceived)} / ${esc(o.QtyOrdered)}</td>
+       <td data-l="Expected">${esc(o.ExpectedDate || '-')}</td><td data-l="Status"><span class="b ${cls}">${esc(o.Status)}</span></td>
+       <td data-l="Action">${W && rem > 0 && !['CANCELLED'].includes(o.Status) ? `<button class="btn sm" data-receive="${esc(o.OrderID)}" data-rem="${rem}">Receive</button> <button class="btn g sm" data-cancel-order="${esc(o.OrderID)}">Cancel</button>` : '-'}</td></tr>`;
+   }).join('') || '<tr><td colspan="8" class="empty">No stock orders yet.</td></tr>'}
+   </tbody></table></div>
+   <p class="mut">Orders do not increase inventory quantity until you record them as received. Partial receipts are supported.</p>`;
+}
+function createStockOrder() {
+  const opts = S.items.map(i => `<option value="${esc(i.ItemID)}">${esc(i.ItemID)} — ${esc(i.Name)} (${esc(i.Rack)})</option>`).join('');
+  modal('Create Stock Order', `<div class="fg"><div><label>Inventory item *</label><select name="itemId" required>${opts}</select></div>
+    ${fld('qty','Quantity ordered *','','type="number" min="0.01" step="any" required')}
+    ${fld('supplier','Supplier *','','required')}
+    ${fld('reference','PO / reference number')}
+    ${fld('expectedDate','Expected delivery date','','type="date"')}
+    ${fld('notes','Notes')}</div>`, 'Save Order', async d => {
+      await api('createOrder', { ...d, rid: rid() }); toast('Stock order created'); await vOrders();
+    });
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.id === 'ord-add') createStockOrder();
+  if (b.dataset.receive) {
+    const id = b.dataset.receive, rem = Number(b.dataset.rem);
+    modal('Receive Stock', `<p>Remaining quantity: <b>${rem}</b></p>${fld('qty','Quantity received *',rem,'type="number" min="0.01" max="'+rem+'" step="any" required')}`, 'Confirm Receipt', async d => {
+      await api('receiveOrder', { orderId: id, qty: d.qty, rid: rid() });
+      toast('Received quantity added to inventory'); await vOrders();
+    });
+  }
+  if (b.dataset.cancelOrder) {
+    const id = b.dataset.cancelOrder;
+    modal('Cancel Stock Order', `<p>Cancel order <b>${esc(id)}</b>? This cannot be undone.</p>`, 'Cancel Order', async () => {
+      await api('cancelOrder', { orderId: id, rid: rid() }); toast('Order cancelled'); await vOrders();
+    });
+  }
+});
