@@ -70,15 +70,3 @@ async function vStockVerification(force = false) {
     </tbody></table></div></div>`;
 }
 
-/* ---------- System Health Monitor ---------- */
-async function vSystemHealth() {
-  const started = performance.now();
-  const d = await api('getSystemHealth');
-  const latency = Math.round(performance.now() - started);
-  const healthy = d.status === 'HEALTHY';
-  $('#view').innerHTML = `<div class="top"><span class="mut sm">Live check of the HEIMS backend and required Google Sheets.</span><button class="btn" id="health-refresh">Run health check</button></div>
-    <div class="card health-overview"><div><span class="mut sm">Overall system status</span><h2><span class="b ${healthy ? 'ok' : 'warn'}">${healthy ? 'HEALTHY' : 'ATTENTION REQUIRED'}</span></h2><p class="mut sm">Last checked: ${esc(fdt(d.checkedAt))}</p></div><div class="health-latency"><span class="mut sm">API round trip</span><strong>${latency} ms</strong><small class="mut">Browser to Apps Script and back</small></div></div>
-    <div class="card health-meta"><div><span class="mut sm">Spreadsheet</span><b>${esc(d.spreadsheet)}</b></div><div><span class="mut sm">Apps Script cache</span><b class="${d.cache === 'OK' ? 'health-good' : 'health-bad'}">${esc(d.cache)}</b></div><div><span class="mut sm">Database sheets</span><b>${d.sheets.filter(x => x.status === 'OK').length} / ${d.sheets.length} available</b></div></div>
-    <div class="card"><h3>Database connectivity</h3><div class="health-sheet-grid">${d.sheets.map(x => `<div class="health-sheet"><div><b>${esc(x.name)}</b><span class="b ${x.status === 'OK' ? 'ok' : 'bad'}">${x.status}</span></div><small class="mut">${x.records == null ? 'Sheet not found' : `${Number(x.records).toLocaleString()} records`}</small></div>`).join('')}</div></div>
-    <p class="mut sm">This monitor checks Apps Script reachability, CacheService and required sheet availability. It does not measure Google service-wide uptime or guarantee every user permission.</p>`;
-}

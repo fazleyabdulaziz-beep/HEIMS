@@ -94,7 +94,7 @@ function drawTable() {
 }
 
 /* ---------- Router & events ---------- */
-const V = { dashboard: ['Dashboard', vDash], inventory: ['Inventory', vInv], qrscanner: ['QR Scanner', vQR], stockin: ['Stock In', () => vMove('in')], stockout: ['Stock Out', () => vMove('out')], adjust: ['Stock Adjustment', () => vMove('adj')], lowstock: ['Low Stock Alerts', vLow], history: ['Transaction History', vHist], audit: ['Audit Log', vAudit], racks: ['Rack Locations', vRacks], categories: ['Categories', vCats], settings: ['Settings', vSettings], orders: ['Stock Orders', vOrders], stockverification: ['Stock Verification', vStockVerification], systemhealth: ['System Health', vSystemHealth] };
+const V = { dashboard: ['Dashboard', vDash], inventory: ['Inventory', vInv], qrscanner: ['QR Scanner', vQR], stockin: ['Stock In', () => vMove('in')], stockout: ['Stock Out', () => vMove('out')], adjust: ['Stock Adjustment', () => vMove('adj')], lowstock: ['Low Stock Alerts', vLow], history: ['Transaction History', vHist], audit: ['Audit Log', vAudit], racks: ['Rack Locations', vRacks], categories: ['Categories', vCats], settings: ['Settings', vSettings], orders: ['Stock Orders', vOrders], stockverification: ['Stock Verification', vStockVerification] };
 async function route() {
   if (typeof stopQRScanner === 'function') await stopQRScanner();
   let k = (location.hash || '#dashboard').slice(1); if (!V[k]) k = 'dashboard';
@@ -104,13 +104,50 @@ async function route() {
   try { await V[k][1](); } catch (e) { $('#view').innerHTML = `<div class="card empty">${esc(e.message)}<br><br><button class="btn" id="retry">Retry</button></div>`; }
 }
 
+
+// Console-only diagnostics: manual execution only; no polling or background requests.
+// Run HEIMS_DIAG.run() in DevTools Console while signed in.
+window.HEIMS_DIAG = Object.freeze({
+  async ping() {
+    const t0 = performance.now();
+    try {
+      await request('dashboard', {}); // bypass app cache to measure a real API round-trip
+      const result = { ok: true, action: 'dashboard', ms: Math.round(performance.now() - t0), cache: 'bypassed' };
+      console.info('[HEIMS] Backend round-trip:', result);
+      return result;
+    } catch (error) {
+      const result = { ok: false, action: 'dashboard', ms: Math.round(performance.now() - t0), error: error.message };
+      console.error('[HEIMS] Backend request failed:', result);
+      return result;
+    }
+  },
+  async inventory() {
+    const t0 = performance.now();
+    try {
+      const data = await request('inventory', {}); // bypass app cache; do not log item records
+      const result = { ok: true, action: 'inventory', ms: Math.round(performance.now() - t0), itemCount: Array.isArray(data.items) ? data.items.length : 0, cache: 'bypassed' };
+      console.info('[HEIMS] Inventory request:', result);
+      return result;
+    } catch (error) {
+      const result = { ok: false, action: 'inventory', ms: Math.round(performance.now() - t0), error: error.message };
+      console.error('[HEIMS] Inventory request failed:', result);
+      return result;
+    }
+  },
+  async run() {
+    console.info('[HEIMS] Manual diagnostics only. No background checks will run.');
+    const results = [await this.ping(), await this.inventory()];
+    console.table(results.map(({ ok, action, ms, itemCount, error }) => ({ ok, action, ms, itemCount: itemCount ?? '', error: error ?? '' })));
+    return results;
+  }
+});
+
 document.addEventListener('click', e => {
   const row = e.target.closest('tr[data-open]'); if (row && !e.target.closest('button,a,input')) return showItem(row.dataset.open);
   const t = e.target.closest('button'); if (!t) return;
   if (t.id === 'eye') { const p = $('#lp'), s = p.type === 'password'; p.type = s ? 'text' : 'password'; t.classList.toggle('on', s); t.setAttribute('aria-pressed', s); t.setAttribute('aria-label', s ? 'Hide password' : 'Show password'); }
   if (t.id === 'retry') route();
   if (t.id === 'verify-refresh') vStockVerification(true).catch(e => toast(e.message, 'bad'));
-  if (t.id === 'health-refresh') vSystemHealth().catch(e => toast(e.message, 'bad'));
   if (t.id === 'clr') { S.f = { q: '', cat: '', rack: '', st: '', brand: '', sort: 'name' }; S.page = 1; Object.keys(S.f).forEach(k => $('#f-' + k).value = ''); drawTable(); }
   if (t.dataset.p) { S.page += +t.dataset.p; drawTable(); }
 });
