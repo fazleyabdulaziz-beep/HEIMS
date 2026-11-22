@@ -2,6 +2,12 @@
 let heimsQRScanner = null;
 let heimsQRRunning = false;
 let heimsQRLastValue = '';
+let heimsQRLastAt = 0;
+let heimsQRHandling = false;
+function qrSuccessFeedback() {
+  try { if (navigator.vibrate) navigator.vibrate([70, 35, 70]); } catch (_) {}
+  try { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; const ctx = new AC(); ctx.resume().catch(() => {}); const osc = ctx.createOscillator(), gain = ctx.createGain(); osc.type = 'sine'; osc.frequency.value = 880; gain.gain.setValueAtTime(0.0001, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.015); gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.13); osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + 0.14); osc.onended = () => ctx.close(); } catch (_) {}
+}
 window.QR_SELECTED_ITEM = null;
 
 async function stopQRScanner() {
@@ -82,16 +88,22 @@ function parseHEIMSQR(raw) {
 async function onQRDecoded(raw) {
   const itemId = parseHEIMSQR(raw);
   if (!itemId) { toast('This QR code does not contain a HEIMS item ID', 'bad'); return; }
-  if (heimsQRRunning) await stopQRScanner();
-  const item = S.items.find(i => String(i.ItemID).toLowerCase() === itemId.toLowerCase());
-  if (!item) {
-    $('#qr-item-result').innerHTML = `<div class="card empty">No active inventory item matches <b>${esc(itemId)}</b>. Check the label or search manually.</div>`;
-    $('#qr-camera-status').textContent = 'QR read complete. Item not found in active inventory.';
-    return;
-  }
-  heimsQRLastValue = item.ItemID;
-  showQRItemResult(item);
-  $('#qr-camera-status').textContent = `Found ${item.ItemID} — ${item.Name}`;
+  const now = Date.now();
+  if (heimsQRHandling || (heimsQRLastValue.toLowerCase() === itemId.toLowerCase() && now - heimsQRLastAt < 2500)) return;
+  heimsQRHandling = true;
+  try {
+    if (heimsQRRunning) await stopQRScanner();
+    const item = S.items.find(i => String(i.ItemID).toLowerCase() === itemId.toLowerCase());
+    heimsQRLastValue = itemId; heimsQRLastAt = now;
+    if (!item) {
+      $('#qr-item-result').innerHTML = `<div class="card empty">No active inventory item matches <b>${esc(itemId)}</b>. Check the label or search manually.</div>`;
+      $('#qr-camera-status').textContent = 'QR read complete. Item not found in active inventory.';
+      return;
+    }
+    qrSuccessFeedback();
+    showQRItemResult(item);
+    $('#qr-camera-status').textContent = `Found ${item.ItemID} — ${item.Name}`;
+  } finally { heimsQRHandling = false; }
 }
 
 function showQRItemResult(i) {
@@ -100,7 +112,7 @@ function showQRItemResult(i) {
   document.querySelectorAll('.qr-item-overlay').forEach(el => el.remove());
   const quantity = i.Quantity === '' ? 'Not counted' : `${esc(i.Quantity)} ${esc(i.Unit)}`;
   const image = i.ImageURL
-    ? `<img class="qr-item-photo" src="${esc(imgUrl(i.ImageURL, 1000))}" alt="${esc(i.Name)}">`
+    ? `<img class="qr-item-photo" decoding="async" fetchpriority="high" src="${esc(imgUrl(i.ImageURL, 800))}" alt="${esc(i.Name)}">`
     : `<div class="qr-item-photo qr-item-no-photo">${NOPIC}<span>No item photo</span></div>`;
   const overlay = document.createElement('div');
   overlay.className = 'ov qr-item-overlay';
@@ -318,7 +330,7 @@ function printQRLabel(i, codeNode) {
 document.addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.id === 'bulk-qr-open') { openBulkQRPrint(); return; }
-  if (b.dataset.qrOpen) { const i = S.items.find(x => x.ItemID === b.dataset.qrOpen); if (i) showQRItemResult(i); }
+  if (b.dataset.qrOpen) { const i = S.items.find(x => x.ItemID === b.dataset.qrOpen); if (i) { qrSuccessFeedback(); showQRItemResult(i); } }
   if (b.dataset.qrStockCheck) { document.querySelectorAll('.qr-item-overlay').forEach(el => el.remove()); openQRStockCheck(b.dataset.qrStockCheck); return; }
   if (b.dataset.qrMove) {
     document.querySelectorAll('.qr-item-overlay').forEach(el => el.remove());

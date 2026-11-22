@@ -2,18 +2,18 @@ const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ST = { IN: ['In Stock', 'ok'], LOW: ['Low Stock', 'warn'], OUT: ['Out of Stock', 'bad'], UNVERIFIED: ['Needs Count', 'mut'] };
 const badge = s => `<span class="b ${ST[s][1]}">${ST[s][0]}</span>`;
-const S = { items: [], cats: [], racks: [], loaded: false, f: { q: '', cat: '', rack: '', st: '', brand: '' }, page: 1 };
+const S = { items: [], cats: [], racks: [], loaded: false, f: { q: '', cat: '', rack: '', st: '', brand: '', sort: 'name' }, page: 1 };
 const PER = 25;
-const imgUrl = (u, w) => String(u).replace(/sz=w\d+/, 'sz=w' + w);
+const imgUrl = (u, w) => String(u || '').replace(/([?&]sz=)w\d+/, '$1w' + w);
 const NOPIC = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/></svg>';
-const thumb = i => i.ImageURL ? `<img class="th" loading="lazy" alt="" src="${esc(imgUrl(i.ImageURL, 160))}">` : `<span class="th ph0">${NOPIC}</span>`;
+const thumb = i => i.ImageURL ? `<img class="th" loading="lazy" decoding="async" fetchpriority="low" alt="" src="${esc(imgUrl(i.ImageURL, 160))}">` : `<span class="th ph0">${NOPIC}</span>`;
 document.addEventListener('error', e => { if (e.target.tagName === 'IMG') e.target.replaceWith(Object.assign(document.createElement('span'), { className: e.target.className + ' ph0', innerHTML: NOPIC })); }, true);
 function showItem(id) {
   const i = (S.showArch ? S.archived : S.items).find(x => x.ItemID === id); if (!i) return;
   const q = i.Quantity === '' ? 'Not counted yet' : i.Quantity + ' ' + i.Unit;
   const rows = [['Category', i.Category], ['Subcategory', i.Subcategory], ['Brand / model', [i.Brand, i.Model].filter(Boolean).join(' / ')], ['Rack', i.Rack], ['In stock', q], ['Minimum level', i.MinStock], ['Description', i.Description], ['Remarks', i.Remarks]].filter(r => r[1] !== '' && r[1] != null);
   const m = document.createElement('div'); m.className = 'ov';
-  m.innerHTML = `<div class="card md det"><div class="hero">${i.ImageURL ? `<img alt="${esc(i.Name)}" src="${esc(imgUrl(i.ImageURL, 1000))}">` : `<div class="noimg">${NOPIC}<span>No photo yet</span></div>`}</div>
+  m.innerHTML = `<div class="card md det"><div class="hero">${i.ImageURL ? `<img alt="${esc(i.Name)}" decoding="async" src="${esc(imgUrl(i.ImageURL, 800))}">` : `<div class="noimg">${NOPIC}<span>No photo yet</span></div>`}</div>
    <div class="dh"><div><h3>${esc(i.Name)}</h3><span class="id">${esc(i.ItemID)}</span></div>${badge(i.st)}</div>
    <dl>${rows.map(r => `<dt>${r[0]}</dt><dd>${esc(r[1])}</dd>`).join('')}</dl><div class="mf"><button class="btn g" data-qr-label="${esc(i.ItemID)}">QR Label</button><button class="btn g" data-x>Close</button></div></div>`;
   document.body.append(m); m.onclick = e => { if (e.target === m || e.target.dataset.x !== undefined) m.remove(); };
@@ -69,18 +69,21 @@ async function vInv() {
   S.showArch = false; await load(false);
   const o = (a, l) => `<option value="">${l}</option>` + a.map(x => `<option>${esc(x)}</option>`).join('');
   const brands = [...new Set(S.items.map(i => i.Brand).filter(Boolean))].sort();
-  $('#view').innerHTML = `${can('ADMIN', 'SUPERVISOR') ? '<div class="top"><button class="btn g" id="arch">Show archived</button><button class="btn g" id="bulk-qr-open">Bulk QR Print</button><button class="btn" id="add">+ Add Item</button></div>' : ''}<div class="bar"><input id="f-q" placeholder="Search Item ID or item name…">
+  $('#view').innerHTML = `${can('ADMIN', 'SUPERVISOR') ? '<div class="top"><button class="btn g" id="arch">Show archived</button><button class="btn g" id="bulk-qr-open">Bulk QR Print</button><button class="btn" id="add">+ Add Item</button></div>' : ''}<div class="bar"><input id="f-q" placeholder="Search ID, name, brand or model…">
    <select id="f-cat">${o(S.cats, 'All categories')}</select><select id="f-rack">${o(S.racks, 'All racks')}</select>
    <select id="f-st"><option value="">All status</option>${Object.entries(ST).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select>
-   <select id="f-brand">${o(brands, 'All brands')}</select><button class="btn g" id="clr">Clear all</button></div><div id="tbl"></div>`;
+   <select id="f-brand">${o(brands, 'All brands')}</select><select id="f-sort"><option value="name">Sort: Name</option><option value="id">Sort: Item ID</option><option value="rack">Sort: Rack</option><option value="low">Sort: Low stock first</option></select><button class="btn g" id="clr">Clear all</button></div><div id="inv-count" class="inv-count mut sm"></div><div id="tbl"></div>`;
   Object.keys(S.f).forEach(k => $('#f-' + k).value = S.f[k]);
   drawTable();
 }
 function drawTable() {
   const f = S.f, q = f.q.toLowerCase(), A = can('ADMIN', 'SUPERVISOR');
-  const rows = (S.showArch ? S.archived : S.items).filter(i => (!q || i.ItemID.toLowerCase().includes(q) || i.Name.toLowerCase().includes(q)) &&
+  const rows = (S.showArch ? S.archived : S.items).filter(i => (!q || [i.ItemID, i.Name, i.Brand, i.Model, i.Subcategory].some(v => String(v || '').toLowerCase().includes(q))) &&
     (!f.cat || i.Category === f.cat) && (!f.rack || i.Rack === f.rack) && (!f.st || i.st === f.st) && (!f.brand || i.Brand === f.brand));
+  const rank = { OUT: 0, LOW: 1, UNVERIFIED: 2, IN: 3 };
+  rows.sort((a, b) => f.sort === 'id' ? String(a.ItemID).localeCompare(String(b.ItemID)) : f.sort === 'rack' ? String(a.Rack).localeCompare(String(b.Rack)) || String(a.Name).localeCompare(String(b.Name)) : f.sort === 'low' ? rank[a.st] - rank[b.st] || String(a.Name).localeCompare(String(b.Name)) : String(a.Name).localeCompare(String(b.Name)));
   const pages = Math.max(1, Math.ceil(rows.length / PER)); S.page = Math.min(S.page, pages);
+  const count = document.getElementById('inv-count'); if (count) count.textContent = `${rows.length} ${S.showArch ? 'archived' : 'active'} item(s) · ${S.items.length} active total · sort: ${f.sort || 'name'}`;
   const cur = rows.slice((S.page - 1) * PER, S.page * PER);
   $('#tbl').innerHTML = !rows.length ? '<div class="card empty">No items match your filters.</div>' :
     `<div class="card" style="padding:4px"><table><thead><tr><th>ID</th><th>Item</th><th>Category</th><th>Brand / Model</th><th>Rack</th><th class="n">Qty</th><th class="n">Min</th><th>Status</th><th>Actions</th></tr></thead><tbody>${cur.map(i => `<tr data-open="${esc(i.ItemID)}">
@@ -91,7 +94,7 @@ function drawTable() {
 }
 
 /* ---------- Router & events ---------- */
-const V = { dashboard: ['Dashboard', vDash], inventory: ['Inventory', vInv], qrscanner: ['QR Scanner', vQR], stockin: ['Stock In', () => vMove('in')], stockout: ['Stock Out', () => vMove('out')], adjust: ['Stock Adjustment', () => vMove('adj')], lowstock: ['Low Stock Alerts', vLow], history: ['Transaction History', vHist], audit: ['Audit Log', vAudit], racks: ['Rack Locations', vRacks], categories: ['Categories', vCats], settings: ['Settings', vSettings], orders: ['Stock Orders', vOrders] };
+const V = { dashboard: ['Dashboard', vDash], inventory: ['Inventory', vInv], qrscanner: ['QR Scanner', vQR], stockin: ['Stock In', () => vMove('in')], stockout: ['Stock Out', () => vMove('out')], adjust: ['Stock Adjustment', () => vMove('adj')], lowstock: ['Low Stock Alerts', vLow], history: ['Transaction History', vHist], audit: ['Audit Log', vAudit], racks: ['Rack Locations', vRacks], categories: ['Categories', vCats], settings: ['Settings', vSettings], orders: ['Stock Orders', vOrders], stockverification: ['Stock Verification', vStockVerification], systemhealth: ['System Health', vSystemHealth] };
 async function route() {
   if (typeof stopQRScanner === 'function') await stopQRScanner();
   let k = (location.hash || '#dashboard').slice(1); if (!V[k]) k = 'dashboard';
@@ -106,10 +109,15 @@ document.addEventListener('click', e => {
   const t = e.target.closest('button'); if (!t) return;
   if (t.id === 'eye') { const p = $('#lp'), s = p.type === 'password'; p.type = s ? 'text' : 'password'; t.classList.toggle('on', s); t.setAttribute('aria-pressed', s); t.setAttribute('aria-label', s ? 'Hide password' : 'Show password'); }
   if (t.id === 'retry') route();
-  if (t.id === 'clr') { S.f = { q: '', cat: '', rack: '', st: '', brand: '' }; S.page = 1; Object.keys(S.f).forEach(k => $('#f-' + k).value = ''); drawTable(); }
+  if (t.id === 'verify-refresh') vStockVerification(true).catch(e => toast(e.message, 'bad'));
+  if (t.id === 'health-refresh') vSystemHealth().catch(e => toast(e.message, 'bad'));
+  if (t.id === 'clr') { S.f = { q: '', cat: '', rack: '', st: '', brand: '', sort: 'name' }; S.page = 1; Object.keys(S.f).forEach(k => $('#f-' + k).value = ''); drawTable(); }
   if (t.dataset.p) { S.page += +t.dataset.p; drawTable(); }
 });
 document.addEventListener('input', e => {
+  if (e.target.id?.startsWith('f-') && e.target.id !== 'f-sort') { S.f[e.target.id.slice(2)] = e.target.value; S.page = 1; drawTable(); }
+});
+document.addEventListener('change', e => {
   if (e.target.id?.startsWith('f-')) { S.f[e.target.id.slice(2)] = e.target.value; S.page = 1; drawTable(); }
 });
 $('#lf').onsubmit = async e => {

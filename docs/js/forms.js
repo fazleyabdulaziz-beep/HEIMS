@@ -19,11 +19,11 @@ const fld = (n, l, v = '', x = '') => `<div><label>${l}</label><input name="${n}
 const sel = (n, l, a, v) => `<div><label>${l}</label><select name="${n}" required>${a.map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></div>`;
 
 const PIC = { data: null };
-function shrink(file, max = 1000) {
+function shrink(file, max = 900) {
   return new Promise((ok, no) => { const r = new FileReader(); r.onerror = () => no(new Error('Could not read this file'));
     r.onload = () => { const im = new Image(); im.onerror = () => no(new Error('This image type is not supported'));
       im.onload = () => { const k = Math.min(1, max / Math.max(im.width, im.height)), c = document.createElement('canvas'); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k);
-        c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); ok(c.toDataURL('image/jpeg', .8)); }; im.src = r.result; }; r.readAsDataURL(file); });
+        c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); ok(c.toDataURL('image/jpeg', .76)); }; im.src = r.result; }; r.readAsDataURL(file); });
 }
 document.addEventListener('change', async e => {
   if (e.target.id !== 'ph' || !e.target.files[0]) return;
@@ -81,7 +81,7 @@ async function vMove(k) {
     if (!i) { $('#cur').innerHTML = '&nbsp;'; return; }
     if (k === 'in' || k === 'out') {
       const photo = i.ImageURL
-        ? `<img class="move-item-photo" loading="lazy" src="${esc(imgUrl(i.ImageURL, 640))}" alt="${esc(i.Name)}">`
+        ? `<img class="move-item-photo" loading="lazy" decoding="async" src="${esc(imgUrl(i.ImageURL, 480))}" alt="${esc(i.Name)}">`
         : `<span class="move-item-photo move-item-no-photo">${NOPIC}<small>No photo</small></span>`;
       $('#cur').innerHTML = `<div class="move-item-card">${photo}<div class="move-item-info"><b class="move-item-name">${esc(i.Name)}</b><small class="mut">${esc(i.ItemID)} · ${esc(i.Category || '-')}</small><div class="move-item-meta"><span>Current stock</span><strong>${i.Quantity === '' ? 'Not counted' : esc(i.Quantity) + ' ' + esc(i.Unit)}</strong></div><small class="mut">Rack: ${esc(i.Rack || '-')}</small></div></div>`;
     } else {

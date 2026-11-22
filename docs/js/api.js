@@ -22,7 +22,7 @@ function resumeSession() {   // trade the saved device key for a fresh session (
 // Short-lived in-memory read cache + in-flight request deduplication.
 // Mutations clear all read caches so stock quantities never remain stale after a write.
 const API_READ_TTL = { inventory: 20000, dashboard: 15000, history: 12000, auditLog: 12000,
-  listOrders: 12000, listUsers: 15000, getSettings: 30000 };
+  listOrders: 12000, listUsers: 15000, getSettings: 30000, stockVerificationDashboard: 10000 };
 const _apiCache = new Map(), _apiPending = new Map();
 const API_WRITES = new Set(['uploadImage','addItem','editItem','archiveItem','restoreItem','addLocation','transferItems',
   'stockIn','stockOut','adjustStock','changePassword','saveUser','resetPassword','addCategory','renameCategory',

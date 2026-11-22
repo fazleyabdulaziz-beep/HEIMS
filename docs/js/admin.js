@@ -31,7 +31,7 @@ document.addEventListener('click', e => {
   const d = b.dataset, done = async () => { await vSettings(); };
   if (b.id === 'addcat') modal('Add category', fld('name', 'Category name *', '', 'required'), 'Add', async x => { await api('addCategory', { ...x, rid: rid() }); toast('Category added'); await vCats(); });
   if (d.cat) modal('Rename category', fld('name', 'New name *', d.cat, 'required') + '<p class="mut">All items in this category are updated.</p>', 'Rename', async x => { await api('renameCategory', { from: d.cat, name: x.name, rid: rid() }); toast('Category renamed'); await vCats(); });
-  if (d.catf) { S.f = { q: '', cat: d.catf, rack: '', st: '', brand: '' }; location.hash = '#inventory'; }
+  if (d.catf) { S.f = { q: '', cat: d.catf, rack: '', st: '', brand: '', sort: 'name' }; location.hash = '#inventory'; }
   if (b.id === 'pwbtn') modal('Change password', pw('current', 'Current password *').replace(' minlength=8', '') + pw('next', 'New password * (min 8 characters)') + pw('again', 'Repeat new password *'), 'Change password', async x => {
     if (x.next !== x.again) throw new Error('New passwords do not match');
     await api('changePassword', { current: x.current, next: x.next, rid: rid() }); toast('Password changed'); });
@@ -50,3 +50,35 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') document.que
 let _last = Date.now();
 ['click', 'keydown', 'touchstart'].forEach(ev => addEventListener(ev, () => _last = Date.now(), { passive: true }));
 setInterval(() => { if (sessionStorage.getItem('token') && !localStorage.rt && Date.now() - _last > 30 * 60 * 1000) logout(true); }, 60000);
+
+/* ---------- Stock Verification Dashboard ---------- */
+async function vStockVerification(force = false) {
+  const d = await api('stockVerificationDashboard', force ? { refresh: true } : {}), c = d.counts;
+  const status = r => ({ MATCHED: ['MATCHED','ok'], QTY_VARIANCE: ['Quantity variance','warn'], ITEM_MISMATCH: ['Item mismatch','bad'], SYSTEM_QTY_UNVERIFIED: ['System unverified','mut'] }[r] || [r || 'Unknown','mut']);
+  $('#view').innerHTML = `<div class="top"><span class="mut sm">Latest physical check per active item is used for the summary.</span><button class="btn g" id="verify-refresh">Refresh</button></div>
+    <div class="kpis verify-kpis">
+      <div class="card kpi"><span class="mut">Active items</span><div class="v">${c.total}</div></div>
+      <div class="card kpi"><span class="mut">Checked items</span><div class="v">${c.checked}</div></div>
+      <div class="card kpi"><span class="mut">Matched</span><div class="v">${c.matched}</div></div>
+      <div class="card kpi warn"><span class="mut">Quantity variance</span><div class="v">${c.quantityVariance}</div></div>
+      <div class="card kpi" style="border-color:var(--bad)"><span class="mut">Item mismatch</span><div class="v">${c.itemMismatch}</div></div>
+      <div class="card kpi"><span class="mut">Pending verification</span><div class="v">${c.pending}</div></div>
+    </div>
+    <div class="card verify-summary"><div class="verify-progress-head"><b>Verification progress</b><strong>${c.total ? Math.round(c.checked / c.total * 100) : 0}%</strong></div><div class="trk"><i style="width:${c.total ? c.checked / c.total * 100 : 0}%"></i></div><p class="mut sm">${c.systemUnverified} checked item(s) still have no system quantity baseline.</p></div>
+    <div class="card verify-table"><h3>Latest stock checks</h3><div class="table-scroll"><table><thead><tr><th>Checked</th><th>Item</th><th class="n">System</th><th class="n">Physical</th><th class="n">Variance</th><th>Result</th><th>Checked by</th><th>Remarks</th></tr></thead><tbody>
+      ${d.latestChecks.map(r => { const st = status(r.result); return `<tr><td data-l="Checked">${esc(fdt(r.timestamp))}</td><td data-l="Item"><b>${esc(r.itemName)}</b><br><small class="mut">${esc(r.itemId)}</small></td><td data-l="System" class="n">${r.systemQty === '' ? '-' : esc(r.systemQty)}</td><td data-l="Physical" class="n">${esc(r.countedQty)}</td><td data-l="Variance" class="n">${r.variance === '' ? '-' : (Number(r.variance) > 0 ? '+' : '') + esc(r.variance)}</td><td data-l="Result"><span class="b ${st[1]}">${st[0]}</span></td><td data-l="Checked by">${esc(r.checkedBy)}</td><td data-l="Remarks">${esc(r.notes || '-')}</td></tr>`; }).join('') || '<tr><td colspan="8" class="empty">No physical stock checks recorded yet.</td></tr>'}
+    </tbody></table></div></div>`;
+}
+
+/* ---------- System Health Monitor ---------- */
+async function vSystemHealth() {
+  const started = performance.now();
+  const d = await api('getSystemHealth');
+  const latency = Math.round(performance.now() - started);
+  const healthy = d.status === 'HEALTHY';
+  $('#view').innerHTML = `<div class="top"><span class="mut sm">Live check of the HEIMS backend and required Google Sheets.</span><button class="btn" id="health-refresh">Run health check</button></div>
+    <div class="card health-overview"><div><span class="mut sm">Overall system status</span><h2><span class="b ${healthy ? 'ok' : 'warn'}">${healthy ? 'HEALTHY' : 'ATTENTION REQUIRED'}</span></h2><p class="mut sm">Last checked: ${esc(fdt(d.checkedAt))}</p></div><div class="health-latency"><span class="mut sm">API round trip</span><strong>${latency} ms</strong><small class="mut">Browser to Apps Script and back</small></div></div>
+    <div class="card health-meta"><div><span class="mut sm">Spreadsheet</span><b>${esc(d.spreadsheet)}</b></div><div><span class="mut sm">Apps Script cache</span><b class="${d.cache === 'OK' ? 'health-good' : 'health-bad'}">${esc(d.cache)}</b></div><div><span class="mut sm">Database sheets</span><b>${d.sheets.filter(x => x.status === 'OK').length} / ${d.sheets.length} available</b></div></div>
+    <div class="card"><h3>Database connectivity</h3><div class="health-sheet-grid">${d.sheets.map(x => `<div class="health-sheet"><div><b>${esc(x.name)}</b><span class="b ${x.status === 'OK' ? 'ok' : 'bad'}">${x.status}</span></div><small class="mut">${x.records == null ? 'Sheet not found' : `${Number(x.records).toLocaleString()} records`}</small></div>`).join('')}</div></div>
+    <p class="mut sm">This monitor checks Apps Script reachability, CacheService and required sheet availability. It does not measure Google service-wide uptime or guarantee every user permission.</p>`;
+}

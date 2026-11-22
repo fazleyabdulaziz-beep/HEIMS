@@ -23,3 +23,14 @@
 - Each QR remains 15 × 15 mm, with item name and item code alongside.
 - Archived items remain excluded because bulk printing uses active inventory only.
 - Deploy the updated `docs` folder to GitHub Pages. No Apps Script redeployment is required. Print at Actual Size / 100%.
+
+
+## HEIMS Optimization V2
+- Added Stock Verification dashboard and System Health Monitor (ADMIN / SUPERVISOR only).
+- Added inventory search across item ID, name, brand, model and subcategory, plus sorting and result counts.
+- Added QR scan beep/vibration feedback where supported and duplicate-scan suppression.
+- Optimized item image loading/compression and changed Apps Script item updates to one batch row write.
+- Backend code update is required. Back up Apps Script first, replace it with `docs/appscripts/code.gs.txt`, and deploy a new version. Do not run `setup()` on an existing spreadsheet.
+- Confirm `STOCK_CHECKS` exists; run `upgradeStockChecksSheet()` only if it is missing. Existing inventory and transaction data are preserved.
+- Upload the full updated `docs` folder to GitHub Pages.
+- Static JavaScript / Apps Script syntax checks passed. Production Google Sheets, camera, audio/vibration and live latency still need verification after deployment.

@@ -24,14 +24,15 @@ const API = { login: login_, logout: logout_, resume: resume_, uploadImage: uplo
   changePassword: changePassword_, listUsers: listUsers_, saveUser: saveUser_, resetPassword: resetPassword_,
   addCategory: addCategory_, renameCategory: renameCategory_, getSettings: getSettings_, saveSettings: saveSettings_,
   listOrders: listOrders_, createOrder: createOrder_, receiveOrder: receiveOrder_, cancelOrder: cancelOrder_, recordStockCheck: recordStockCheck_,
+  stockVerificationDashboard: stockVerificationDashboard_, getSystemHealth: getSystemHealth_,
   stockIn: (p, u) => move_(p, u, 'STOCK_IN'), stockOut: (p, u) => move_(p, u, 'STOCK_OUT'), adjustStock: (p, u) => move_(p, u, 'ADJUSTMENT') };
 
 function doGet() { return ContentService.createTextOutput('HEIMS API OK'); }
 
-const READ_ACTIONS_ = ['inventory','dashboard','history','auditLog','listOrders','listUsers','getSettings'];
+const READ_ACTIONS_ = ['inventory','dashboard','history','auditLog','listOrders','listUsers','getSettings','stockVerificationDashboard','getSystemHealth'];
 function clearSheetCache_() {
   const c = CacheService.getScriptCache();
-  ['ITEMS','TRANSACTIONS','CATEGORIES','LOCATIONS','AUDIT_LOG','SETTINGS','ORDERS'].forEach(n => c.remove('rows_' + n));
+  ['ITEMS','TRANSACTIONS','CATEGORIES','LOCATIONS','AUDIT_LOG','SETTINGS','ORDERS','STOCK_CHECKS'].forEach(n => c.remove('rows_' + n));
 }
 function doPost(e) {
   let out, action = '';
@@ -210,7 +211,12 @@ function item_(id) {
   for (let i = 1; i < v.length; i++) if (v[i][0] === id) return { sh: sh, h: h, row: i + 1, o: Object.fromEntries(h.map((k, j) => [k, v[i][j]])) };
   throw new Error('Item not found');
 }
-function upd_(it, o, u) { o.UpdatedAt = new Date(); o.UpdatedBy = u.username; Object.keys(o).forEach(k => it.sh.getRange(it.row, it.h.indexOf(k) + 1).setValue(o[k])); }
+function upd_(it, o, u) {
+  // Write the complete item row in one Sheets operation instead of one setValue() per field.
+  o.UpdatedAt = new Date(); o.UpdatedBy = u.username;
+  const next = it.h.map(k => Object.prototype.hasOwnProperty.call(o, k) ? o[k] : it.o[k]);
+  it.sh.getRange(it.row, 1, 1, it.h.length).setValues([next]);
+}
 function txn_(i, type, prev, chg, nw, x, u) {
   sheet_('TRANSACTIONS').appendRow([nextId_('TRANSACTIONS', 'TXN-', 6), new Date(), i.ItemID, i.Name, type, prev, chg, nw,
     x.staff || u.name, x.dept || '', x.ref || '', x.supplier || '', x.remarks || '', u.username]);
@@ -286,6 +292,58 @@ function recordStockCheck_(p, u) {
       { countedQty: counted, variance: variance, identityMatch: identity, result: result, checkId: id }, 'STOCK_CHECK');
     return { checkId: id, itemId: it.o.ItemID, itemName: it.o.Name, systemQty: systemQty, countedQty: counted, variance: variance, identityMatch: identity, result: result };
   });
+}
+
+
+/* ---------- Stock verification dashboard & system health ---------- */
+function stockVerificationDashboard_(p, u) {
+  need_(u, WRITE);
+  const sh = SpreadsheetApp.getActive().getSheetByName('STOCK_CHECKS');
+  if (!sh) throw new Error('STOCK_CHECKS sheet is missing. Run upgradeStockChecksSheet() once in Apps Script.');
+  const active = activeItems_();
+  const checks = rows_('STOCK_CHECKS').sort((a, b) => Date.parse(b.Timestamp) - Date.parse(a.Timestamp));
+  const latest = {};
+  checks.forEach(c => { if (!latest[c.ItemID]) latest[c.ItemID] = c; });
+  const activeIds = new Set(active.map(i => i.ItemID));
+  const current = active.map(i => ({ item: i, check: latest[i.ItemID] || null }));
+  const counts = { total: active.length, checked: 0, matched: 0, quantityVariance: 0, itemMismatch: 0, systemUnverified: 0 };
+  current.forEach(x => {
+    if (!x.check) return;
+    counts.checked++;
+    if (x.check.Result === 'MATCHED') counts.matched++;
+    else if (x.check.Result === 'QTY_VARIANCE') counts.quantityVariance++;
+    else if (x.check.Result === 'ITEM_MISMATCH') counts.itemMismatch++;
+    else if (x.check.Result === 'SYSTEM_QTY_UNVERIFIED') counts.systemUnverified++;
+  });
+  counts.pending = Math.max(0, counts.total - counts.checked);
+  return {
+    counts: counts,
+    latestChecks: checks.filter(c => activeIds.has(c.ItemID)).slice(0, 40).map(c => ({
+      checkId: c.CheckID, timestamp: c.Timestamp, itemId: c.ItemID, itemName: c.ItemName,
+      systemQty: c.SystemQty, countedQty: c.CountedQty, variance: c.Variance,
+      identityMatch: c.IdentityMatch, notes: c.Notes, checkedBy: c.CheckedBy, result: c.Result
+    }))
+  };
+}
+
+function getSystemHealth_(p, u) {
+  need_(u, WRITE);
+  const ss = SpreadsheetApp.getActive();
+  const required = ['ITEMS','TRANSACTIONS','CATEGORIES','LOCATIONS','USERS','AUDIT_LOG','ORDERS','STOCK_CHECKS'];
+  const sheets = required.map(name => {
+    const sh = ss.getSheetByName(name);
+    return { name: name, status: sh ? 'OK' : 'MISSING', records: sh ? Math.max(0, sh.getLastRow() - 1) : null };
+  });
+  let cacheOk = false;
+  try {
+    const cache = CacheService.getScriptCache(), key = 'heims_health_probe';
+    cache.put(key, 'ok', 15); cacheOk = cache.get(key) === 'ok';
+  } catch (e) { cacheOk = false; }
+  const healthy = sheets.every(x => x.status === 'OK') && cacheOk;
+  return {
+    status: healthy ? 'HEALTHY' : 'ATTENTION', checkedAt: new Date().toISOString(),
+    spreadsheet: ss.getName(), cache: cacheOk ? 'OK' : 'UNAVAILABLE', sheets: sheets
+  };
 }
 
 function move_(p, u, type) {                     // STOCK_IN | STOCK_OUT | ADJUSTMENT
