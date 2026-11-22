@@ -173,23 +173,24 @@ function openQRMoveModal(itemId, kind) {
       ? '<p class="mut sm">Record who took the item and where it will be used.</p>'
       : '<p class="mut sm">Record the quantity received into inventory.</p>';
 
-  modal(cfg.title, `${summary}${helper}<div class="fg">${fields}</div>`, `Confirm ${cfg.title}`, async data => {
+  const beginMovement = data => {
     if (kind === 'adj') {
-      await api(cfg.action, { ...data, itemId: i.ItemID, rid: rid() });
-      S.loaded = false;
-      toast(`${cfg.title} recorded successfully. Open inventory to refresh the latest balance.`, 'ok');
+      api(cfg.action, { ...data, itemId: i.ItemID, rid: rid() })
+        .then(() => { S.loaded = false; toast(`${cfg.title} recorded successfully. Open inventory to refresh the latest balance.`, 'ok'); })
+        .catch(error => toast(error.message || 'Stock adjustment failed.', 'bad'));
       return;
     }
+
     const previousQty = Number(i.Quantity || 0);
-    const requestedQty = Number(kind === 'adj' ? data.newQty : data.qty);
+    const requestedQty = Number(data.qty);
     const requestId = rid();
     const payload = { ...data, itemId: i.ItemID, rid: requestId };
-
-    // Show an immediate pending state (target: <500ms UI response). The actual
-    // stock write remains on the server; success is shown only after confirmation.
     const pending = showQRMovePending(i, kind, previousQty, requestedQty);
-    api(cfg.action, payload).then(result => {
-      if (kind === 'in' || kind === 'out') {
+
+    // Let the browser paint the pending popup before starting fetch()/Apps Script.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const clientStarted = performance.now();
+      api(cfg.action, payload).then(result => {
         const newQty = Number(result && result.qty);
         if (!Number.isFinite(newQty)) throw new Error('The server saved the movement but did not return a valid balance. Check inventory before retrying.');
         const updated = { ...i, Quantity: newQty };
@@ -198,18 +199,20 @@ function openQRMoveModal(itemId, kind) {
         const index = S.items.findIndex(x => x.ItemID === i.ItemID);
         if (index >= 0) S.items[index] = updated;
         S.loaded = false;
+        console.info('[HEIMS stock movement]', cfg.action, 'client round-trip ms:', Math.round(performance.now() - clientStarted));
         renderQRMoveStatus(pending, updated, kind, 'success');
-      } else {
-        S.loaded = false;
-        pending.remove();
-        toast(`${cfg.title} recorded successfully. Open inventory to refresh the latest balance.`, 'ok');
-      }
-    }).catch(error => {
-      const uncertain = /timed out|cannot reach server|failed to fetch|networkerror/i.test(String(error && error.message));
-      if (uncertain) S.loaded = false;
-      renderQRMoveStatus(pending, i, kind, uncertain ? 'uncertain' : 'error', error && error.message);
-    });
-  }, 'qr-move-overlay');
+      }).catch(error => {
+        const uncertain = /timed out|cannot reach server|failed to fetch|networkerror/i.test(String(error && error.message));
+        if (uncertain) S.loaded = false;
+        console.error('[HEIMS stock movement]', cfg.action, error);
+        renderQRMoveStatus(pending, i, kind, uncertain ? 'uncertain' : 'error', error && error.message);
+      });
+    }));
+  };
+
+  modal(cfg.title, `${summary}${helper}<div class="fg">${fields}</div>`, `Confirm ${cfg.title}`,
+    async () => {}, 'qr-move-overlay', beginMovement);
+
 }
 
 function showQRMovePending(item, kind, previousQty, requestedQty) {

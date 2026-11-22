@@ -3,7 +3,7 @@ const can = (...r) => r.includes((JSON.parse(sessionStorage.user || '{}')).role)
 const rid = () => crypto.randomUUID();
 function applyRoles() { document.querySelectorAll('[data-roles]').forEach(a => a.hidden = !can(...a.dataset.roles.split(','))); }
 
-function modal(title, body, okText, onOk, extraClass = '') {
+function modal(title, body, okText, onOk, extraClass = '', onStart = null) {
   const m = document.createElement('div'); m.className = 'ov' + (extraClass ? ' ' + extraClass : '');
   m.innerHTML = `<form class="card md"><h3>${title}</h3>${body}<div class="err"></div><div class="mf"><button type="button" class="btn g" data-x>Cancel</button><button class="btn">${okText}</button></div></form>`;
   document.body.append(m);
@@ -12,7 +12,15 @@ function modal(title, body, okText, onOk, extraClass = '') {
   m.onclick = e => { if (e.target === m || e.target.dataset.x !== undefined) m.remove(); };
   f.onsubmit = async e => {
     e.preventDefault(); b.disabled = true; er.textContent = '';
-    try { await onOk(Object.fromEntries(new FormData(f))); m.remove(); } catch (x) { er.textContent = x.message; b.disabled = false; }
+    const values = Object.fromEntries(new FormData(f));
+    // Fast-path forms can close immediately and start work on the next frame,
+    // allowing the browser to paint a pending state before any network request.
+    if (typeof onStart === 'function') {
+      try { onStart(values); m.remove(); }
+      catch (x) { er.textContent = x.message; b.disabled = false; }
+      return;
+    }
+    try { await onOk(values); m.remove(); } catch (x) { er.textContent = x.message; b.disabled = false; }
   };
 }
 const fld = (n, l, v = '', x = '') => `<div><label>${l}</label><input name="${n}" value="${esc(v)}" ${x}></div>`;

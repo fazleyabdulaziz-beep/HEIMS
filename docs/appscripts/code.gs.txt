@@ -1,3 +1,4 @@
+var HEIMS_DIAG = {};
 /**
  * HEIMS backend - Google Apps Script (bound to the HEIMS Google Sheet)
  * API: POST text/plain JSON {action, payload, token} -> {ok, data | error, code}
@@ -37,20 +38,22 @@ function clearSheetCache_() {
   c.remove('dashboard_stockout_usage');
 }
 function doPost(e) {
+  const startedAt = Date.now();
+  HEIMS_DIAG = { lockWaitMs: 0, lockWorkMs: 0 };
   let out, action = '';
   try {
     const r = JSON.parse(e.postData.contents), fn = API[r.action]; action = r.action;
     if (!fn) throw new Error('Unknown action');
-    // Clear before writes so validation and calculations use current sheet contents.
-    if (action && READ_ACTIONS_.indexOf(action) < 0 && !['login','resume','logout'].includes(action)) clearSheetCache_();
+    // A write handler reads authoritative rows directly; pre-clearing read caches is redundant.
     const user = ['login', 'resume'].includes(action) ? null : session_(r.token);
     out = { ok: true, data: fn(r.payload || {}, user, r.token) };
   } catch (err) {
     out = { ok: false, error: err.message, code: err.code || 'ERR' };
   } finally {
-    // Also invalidate after failed writes: some multi-step operations may have written before an error.
+    // Invalidate read caches after writes, including partially completed writes that threw.
     if (action && READ_ACTIONS_.indexOf(action) < 0 && !['login','resume','logout'].includes(action)) clearSheetCache_();
   }
+  out.meta = { serverMs: Date.now() - startedAt, lockWaitMs: HEIMS_DIAG.lockWaitMs || 0, lockWorkMs: HEIMS_DIAG.lockWorkMs || 0 };
   return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -250,17 +253,29 @@ function nextId_(sn, prefix, w) {
   return prefix + String(m + 1).padStart(w, '0');
 }
 function locked_(p, fn) {                        // one writer at a time + duplicate-submit guard
-  const l = LockService.getScriptLock(); l.waitLock(20000);
+  const l = LockService.getScriptLock(), waitStarted = Date.now();
+  l.waitLock(20000);
+  HEIMS_DIAG.lockWaitMs = Date.now() - waitStarted;
+  const workStarted = Date.now();
   try {
     const c = CacheService.getScriptCache(), k = 'r_' + p.rid;
     if (p.rid && c.get(k)) throw new Error('Duplicate submission ignored');
     const r = fn(); if (p.rid) c.put(k, '1', 600); return r;
-  } finally { l.releaseLock(); }
+  } finally {
+    HEIMS_DIAG.lockWorkMs = Date.now() - workStarted;
+    l.releaseLock();
+  }
 }
 function item_(id) {
-  const sh = sheet_('ITEMS'), v = sh.getDataRange().getValues(), h = v[0];
-  for (let i = 1; i < v.length; i++) if (v[i][0] === id) return { sh: sh, h: h, row: i + 1, o: Object.fromEntries(h.map((k, j) => [k, v[i][j]])) };
-  throw new Error('Item not found');
+  // Find the ID in column A, then read only its row instead of loading the full ITEMS sheet.
+  const sh = sheet_('ITEMS'), last = sh.getLastRow(), lastCol = sh.getLastColumn();
+  if (last < 2 || lastCol < 1) throw new Error('Item not found');
+  const hit = sh.getRange(2, 1, last - 1, 1).createTextFinder(String(id)).matchEntireCell(true).findNext();
+  if (!hit) throw new Error('Item not found');
+  const row = hit.getRow();
+  const h = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  const values = sh.getRange(row, 1, 1, lastCol).getValues()[0];
+  return { sh: sh, h: h, row: row, o: Object.fromEntries(h.map((k, j) => [k, values[j]])) };
 }
 function upd_(it, o, u) {
   // Write the complete item row in one Sheets operation instead of one setValue() per field.

@@ -177,10 +177,10 @@ tbody tr{transition:background .2s,box-shadow .2s}tbody tr:hover{background:colo
 .qr-move-overlay{z-index:65}
 
 /* QR Stock In / Stock Out success confirmation */
-.qr-move-success-overlay{z-index:80;place-items:center}
-.qr-move-success{position:relative;width:100%;max-width:390px;padding:30px 24px 24px;text-align:center;overflow:hidden;animation:pop .35s var(--sp)}
+.qr-move-success-overlay{z-index:80;place-items:center;backdrop-filter:none;animation:none}
+.qr-move-success{position:relative;width:100%;max-width:390px;padding:30px 24px 24px;text-align:center;overflow:hidden;animation:none}
 .qr-success-close{position:absolute;right:12px;top:12px}
-.qr-success-mark{width:76px;height:76px;margin:4px auto 14px;color:var(--ok);filter:drop-shadow(0 7px 15px color-mix(in srgb,var(--ok) 25%,transparent));animation:qrSuccessPop .45s var(--sp) both}
+.qr-success-mark{width:76px;height:76px;margin:4px auto 14px;color:var(--ok);filter:none;animation:none}
 .qr-success-mark svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round}
 .qr-success-mark circle{stroke:currentColor;opacity:.22;stroke-width:2.5}
 .qr-success-kicker{font-size:10px;font-weight:800;letter-spacing:.16em;color:var(--ok)}

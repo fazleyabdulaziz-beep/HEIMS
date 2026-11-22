@@ -1,10 +1,17 @@
 async function raw(action, payload) {
+  const clientStarted = performance.now();
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 30000);
   try {
     // text/plain body = "simple request" (no CORS preflight; Apps Script cannot answer OPTIONS)
     const r = await fetch(CONFIG.API_URL, { method: 'POST', signal: ctl.signal,
       body: JSON.stringify({ action, payload, token: sessionStorage.getItem('token') }) });
     const j = await r.json();
+    console.info('[HEIMS API timing]', action, {
+      clientRoundTripMs: Math.round(performance.now() - clientStarted),
+      serverMs: j.meta && j.meta.serverMs,
+      lockWaitMs: j.meta && j.meta.lockWaitMs,
+      lockWorkMs: j.meta && j.meta.lockWorkMs
+    });
     if (!j.ok) throw Object.assign(new Error(j.error), { code: j.code });
     return j.data;
   } catch (e) {
