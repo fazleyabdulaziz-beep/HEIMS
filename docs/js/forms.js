@@ -1,10 +1,10 @@
-/* Phase 2: modals, item add/edit/archive, stock in/out/adjustment */
+/* HEIMS forms: item add/edit/archive and shared modal helpers */
 const can = (...r) => r.includes((JSON.parse(sessionStorage.user || '{}')).role);
 const rid = () => crypto.randomUUID();
 function applyRoles() { document.querySelectorAll('[data-roles]').forEach(a => a.hidden = !can(...a.dataset.roles.split(','))); }
 
-function modal(title, body, okText, onOk) {
-  const m = document.createElement('div'); m.className = 'ov';
+function modal(title, body, okText, onOk, extraClass = '') {
+  const m = document.createElement('div'); m.className = 'ov' + (extraClass ? ' ' + extraClass : '');
   m.innerHTML = `<form class="card md"><h3>${title}</h3>${body}<div class="err"></div><div class="mf"><button type="button" class="btn g" data-x>Cancel</button><button class="btn">${okText}</button></div></form>`;
   document.body.append(m);
   const f = m.firstChild, b = f.querySelector('.mf .btn:last-child'), er = f.querySelector('.err');
@@ -37,7 +37,7 @@ function itemForm(it) {
    ${fld('subcategory', 'Subcategory', it.Subcategory)}${fld('brand', 'Brand', it.Brand)}${fld('model', 'Model number', it.Model)}${sel('rack', 'Rack / location *', S.racks, it.Rack)}
    ${fld('unit', 'Unit *', it.Unit || 'PCS', 'required')}${fld('minStock', 'Minimum stock level', it.MinStock ?? 0, 'type=number min=0 step=any')}
    ${e ? '' : fld('quantity', 'Opening quantity (blank = needs count)', '', 'type=number min=0 step=any')}<div class="ph"><label>Photo (optional)</label><div class="phr">${it.ImageURL ? `<img class="th lg" id="ph-prev" alt="" src="${esc(imgUrl(it.ImageURL, 160))}">` : `<span class="th lg ph0" id="ph-prev">${NOPIC}</span>`}<input type="file" id="ph" accept="image/*" hidden><button type="button" class="btn g sm" id="ph-pick">Take or choose photo</button><button type="button" class="btn g sm" id="ph-rm" ${it.ImageURL ? '' : 'hidden'}>Remove</button></div><input type="hidden" name="imageUrl" value="${esc(it.ImageURL || '')}"></div>
-   ${fld('description', 'Description', it.Description)}${fld('remarks', 'Remarks', it.Remarks)}</div>${e ? '<p class="mut">To change quantity use Stock In, Stock Out or Stock Adjustment.</p>' : ''}`,
+   ${fld('description', 'Description', it.Description)}${fld('remarks', 'Remarks', it.Remarks)}</div>${e ? '<p class="mut">To change quantity, open QR Stock Movement and scan or search this item.</p>' : ''}`,
     e ? 'Save changes' : 'Add item', async d => {
       if (PIC.data) d.imageUrl = (await api('uploadImage', { data: PIC.data, rid: rid() })).url;
       await api(e ? 'editItem' : 'addItem', { ...d, itemId: it.ItemID, rid: rid() });
@@ -60,43 +60,6 @@ document.addEventListener('click', e => {
   if (b.id === 'arch') toggleArch(b);
   if (b.dataset.restore) restore(b.dataset.restore);
 });
-
-const MV = {
-  in: { t: 'Stock In', a: 'stockIn', f: [['qty', 'Quantity received', 'number', 1], ['remarks', 'Remarks']] },
-  out: { t: 'Stock Out', a: 'stockOut', f: [['qty', 'Quantity taken', 'number', 1], ['staff', 'Staff name / ID', 'text', 1], ['dept', 'Location used (room no. or area)', 'text', 1], ['remarks', 'Remarks']] },
-  adj: { t: 'Stock Adjustment', a: 'adjustStock', f: [['newQty', 'Counted quantity', 'number', 1], ['reason', 'Reason for adjustment', 'text', 1]] }
-};
-async function vMove(k) {
-  await load(true);
-  const c = MV[k], u = JSON.parse(sessionStorage.user), min = k === 'adj' ? 0 : 0.01;
-  $('#view').innerHTML = `<form id="mv" class="card md0"><label>Item (type ID or name) *</label>
-   <input name="item" list="dl" required autocomplete="off" placeholder="e.g. ITM-0004 or Shower Head"><datalist id="dl">${S.items.map(i => `<option value="${esc(i.ItemID)} — ${esc(i.Name)}">`).join('')}</datalist>
-   <div id="cur" class="mut" style="margin-top:6px">&nbsp;</div>
-   ${c.f.map(([n, l, t, r]) => `<label>${l}${r ? ' *' : ''}</label><input name="${n}" type="${t || 'text'}" ${t === 'number' ? `min="${min}" step="any"` : ''} ${r ? 'required' : ''} value="${n === 'staff' ? esc(u.name) : ''}">`).join('')}
-   <div class="err"></div><button class="btn" style="margin-top:12px">${c.t}</button></form>`;
-  const f = $('#mv'), find = () => S.items.find(i => i.ItemID === f.item.value.split(' — ')[0].trim());
-  if (window.QR_SELECTED_ITEM) { const picked = S.items.find(i => i.ItemID === window.QR_SELECTED_ITEM); if (picked) f.item.value = `${picked.ItemID} — ${picked.Name}`; window.QR_SELECTED_ITEM = null; }
-  f.item.oninput = () => {
-    const i = find();
-    if (!i) { $('#cur').innerHTML = '&nbsp;'; return; }
-    if (k === 'in' || k === 'out') {
-      const photo = i.ImageURL
-        ? `<img class="move-item-photo" loading="lazy" decoding="async" src="${esc(imgUrl(i.ImageURL, 480))}" alt="${esc(i.Name)}">`
-        : `<span class="move-item-photo move-item-no-photo">${NOPIC}<small>No photo</small></span>`;
-      $('#cur').innerHTML = `<div class="move-item-card">${photo}<div class="move-item-info"><b class="move-item-name">${esc(i.Name)}</b><small class="mut">${esc(i.ItemID)} · ${esc(i.Category || '-')}</small><div class="move-item-meta"><span>Current stock</span><strong>${i.Quantity === '' ? 'Not counted' : esc(i.Quantity) + ' ' + esc(i.Unit)}</strong></div><small class="mut">Rack: ${esc(i.Rack || '-')}</small></div></div>`;
-    } else {
-      $('#cur').innerHTML = `<span class="nm">${thumb(i)}<span>Current: <b>${i.Quantity === '' ? 'not counted' : esc(i.Quantity) + ' ' + esc(i.Unit)}</b> · ${esc(i.Rack)}</span></span>`;
-    }
-  };
-  f.item.oninput();
-  f.onsubmit = async e => {
-    e.preventDefault(); const i = find(), er = f.querySelector('.err'), b = f.querySelector('button'); er.textContent = '';
-    if (!i) { er.textContent = 'Select a valid item from the list'; return; }
-    b.disabled = true;
-    try { const d = Object.fromEntries(new FormData(f)); delete d.item; await api(c.a, { ...d, itemId: i.ItemID, rid: rid() }); toast(c.t + ' recorded'); await vMove(k); }
-    catch (x) { er.textContent = x.message; b.disabled = false; }
-  };
-}
 
 async function toggleArch(b) {
   S.showArch = !S.showArch; b.textContent = S.showArch ? 'Show active' : 'Show archived'; S.page = 1;

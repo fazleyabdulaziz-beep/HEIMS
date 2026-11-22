@@ -22,12 +22,12 @@ async function vQR() {
   await load(false);
   $('#view').innerHTML = `<div class="qr-layout">
     <section class="card qr-scan-card">
-      <div class="qr-card-head"><div><h3>Scan spare-part QR</h3><p class="mut sm">Point your phone camera at a HEIMS item label.</p></div><span class="b ok">Mobile ready</span></div>
+      <div class="qr-card-head"><div><h3>Scan item QR</h3><p class="mut sm">Scan an item to record Stock In, Stock Out or Stock Adjustment directly here.</p></div><span class="b ok">Mobile ready</span></div>
       <div id="qr-reader" class="qr-reader"><div class="qr-placeholder"><span class="qr-placeholder-icon">▦</span><b>Camera scanner</b><span class="mut sm">Tap Start Camera and allow camera access.</span></div></div>
       <div class="qr-controls"><button class="btn" id="qr-start">Start Camera</button><button class="btn g" id="qr-stop" disabled>Stop Camera</button><label class="btn g qr-file-label" for="qr-file">Scan from photo</label><input id="qr-file" type="file" accept="image/*" capture="environment" hidden></div>
       <p id="qr-camera-status" class="mut sm" aria-live="polite">Camera access requires HTTPS and permission from your browser.</p>
     </section>
-    <section class="card qr-lookup-card"><h3>Find item manually</h3><p class="mut sm">Use this if camera access is unavailable.</p><input id="qr-search" placeholder="Search item ID or name…" autocomplete="off"><div id="qr-search-results" class="qr-search-results"><span class="mut sm">Type an item ID or name.</span></div></section>
+    <section class="card qr-lookup-card"><h3>Find item manually</h3><p class="mut sm">Search an item if the camera is unavailable, then manage its stock here.</p><input id="qr-search" placeholder="Search item ID or name…" autocomplete="off"><div id="qr-search-results" class="qr-search-results"><span class="mut sm">Type an item ID or name.</span></div></section>
   </div><section id="qr-item-result" class="qr-item-result" aria-live="polite"></section>
   <p class="mut sm qr-footnote">Tip: Print labels from Inventory → QR Label. Each code contains the HEIMS item ID only; it does not contain stock quantities or personal data.</p>`;
   $('#qr-start').onclick = startQRScanner;
@@ -121,13 +121,71 @@ function showQRItemResult(i) {
     ${image}
     <div class="qr-pop-body"><div class="qr-found-main"><div><h3>${esc(i.Name)}</h3><span class="id">${esc(i.ItemID)}</span></div>${badge(i.st)}</div>
       <div class="qr-details"><span><small class="mut">Current quantity</small><b>${quantity}</b></span><span><small class="mut">Rack / location</small><b>${esc(i.Rack || '-')}</b></span><span><small class="mut">Category</small><b>${esc(i.Category || '-')}</b></span><span><small class="mut">Minimum stock</small><b>${esc(i.MinStock ?? 0)} ${esc(i.Unit || '')}</b></span></div>
-      <div class="qr-actions"><button class="btn" data-qr-move="in" data-item="${esc(i.ItemID)}">Stock In</button><button class="btn" data-qr-move="out" data-item="${esc(i.ItemID)}">Stock Out</button>${can('ADMIN','SUPERVISOR') ? `<button class="btn g qr-check-btn" data-qr-stock-check="${esc(i.ItemID)}">Stock Check</button>` : ''}<button class="btn g" data-qr-label="${esc(i.ItemID)}">Print QR Label</button></div>
+      ${i.Quantity === '' ? `<p class="dash-note">This item has no opening quantity yet. An Admin or Supervisor must record its initial quantity using Stock Adjustment before Stock In or Stock Out.</p>` : ''}
+      <div class="qr-actions">
+        ${can('ADMIN','SUPERVISOR','TECHNICIAN') ? `<button class="btn" data-qr-move="in" data-item="${esc(i.ItemID)}">Stock In</button><button class="btn" data-qr-move="out" data-item="${esc(i.ItemID)}">Stock Out</button>` : ''}
+        ${can('ADMIN','SUPERVISOR') ? `<button class="btn g" data-qr-move="adj" data-item="${esc(i.ItemID)}">Stock Adjustment</button><button class="btn g qr-check-btn" data-qr-stock-check="${esc(i.ItemID)}">Stock Verification</button>` : ''}
+        <button class="btn g" data-qr-label="${esc(i.ItemID)}">Print QR Label</button>
+      </div>
     </div></section>`;
   overlay.addEventListener('click', e => {
     if (e.target === overlay || e.target.closest('[data-qr-close]')) overlay.remove();
   });
   document.body.append(overlay);
   $('#qr-item-result').innerHTML = '';
+}
+
+/* ---------- Direct QR stock movement workflow ---------- */
+const QR_MOVES = {
+  in: { title: 'Stock In', action: 'stockIn', fields: [['qty', 'Quantity received', 'number', 1], ['remarks', 'Remarks', 'text', 0]] },
+  out: { title: 'Stock Out', action: 'stockOut', fields: [['qty', 'Quantity taken', 'number', 1], ['staff', 'Staff name / ID', 'text', 1], ['dept', 'Location used (room no. or area)', 'text', 1], ['remarks', 'Remarks', 'text', 0]] },
+  adj: { title: 'Stock Adjustment', action: 'adjustStock', fields: [['newQty', 'New verified quantity', 'number', 1], ['reason', 'Reason for adjustment', 'text', 1]] }
+};
+
+function openQRMoveModal(itemId, kind) {
+  const i = S.items.find(x => x.ItemID === itemId);
+  if (!i) { toast('Item not found. Refresh inventory and scan again.', 'bad'); return; }
+  const manager = can('ADMIN', 'SUPERVISOR');
+  const allowed = kind === 'adj' ? manager : can('ADMIN', 'SUPERVISOR', 'TECHNICIAN');
+  if (!allowed) { toast('Your role does not have permission for this stock action.', 'bad'); return; }
+  if ((kind === 'in' || kind === 'out') && i.Quantity === '') {
+    toast('Initial quantity is not recorded. Ask an Admin or Supervisor to perform Stock Adjustment first.', 'bad');
+    return;
+  }
+
+  const cfg = QR_MOVES[kind];
+  if (!cfg) return;
+  const u = JSON.parse(sessionStorage.user || '{}');
+  const photo = i.ImageURL
+    ? `<img class="qr-move-photo" src="${esc(imgUrl(i.ImageURL, 240))}" alt="${esc(i.Name)}">`
+    : `<div class="qr-move-photo qr-item-no-photo">${NOPIC}</div>`;
+  const summary = `<div class="qr-check-item">${photo}<div><b>${esc(i.Name)}</b><small class="mut">${esc(i.ItemID)} · ${esc(i.Rack || '-')}</small><small class="mut">Current stock: <strong>${i.Quantity === '' ? 'Not counted' : `${esc(i.Quantity)} ${esc(i.Unit || '')}`}</strong></small></div></div>`;
+  const fields = cfg.fields.map(([name, label, type, required]) => {
+    const attrs = type === 'number'
+      ? `type="number" min="${kind === 'adj' ? '0' : '0.01'}" step="any" ${required ? 'required' : ''}`
+      : `${required ? 'required' : ''} maxlength="300"`;
+    const value = name === 'staff' ? u.name || '' : '';
+    return fld(name, label + (required ? ' *' : ''), value, attrs);
+  }).join('');
+  const helper = kind === 'adj'
+    ? '<p class="mut sm">Adjustment sets the new actual stock balance. Use only after physically checking the quantity.</p>'
+    : kind === 'out'
+      ? '<p class="mut sm">Record who took the item and where it will be used.</p>'
+      : '<p class="mut sm">Record the quantity received into inventory.</p>';
+
+  modal(cfg.title, `${summary}${helper}<div class="fg">${fields}</div>`, `Confirm ${cfg.title}`, async data => {
+    await api(cfg.action, { ...data, itemId: i.ItemID, rid: rid() });
+    toast(`${cfg.title} recorded successfully.`, 'ok');
+    // The stock movement is already committed. A failed refresh must not leave
+    // the form open and invite a second submission of the same movement.
+    try {
+      await load(true);
+      const updated = S.items.find(x => x.ItemID === i.ItemID);
+      if (updated) showQRItemResult(updated);
+    } catch (refreshError) {
+      toast('Movement saved, but inventory could not refresh. Reload HEIMS to see the latest balance.', 'bad');
+    }
+  }, 'qr-move-overlay');
 }
 
 function openQRStockCheck(itemId) {
@@ -333,8 +391,8 @@ document.addEventListener('click', e => {
   if (b.dataset.qrOpen) { const i = S.items.find(x => x.ItemID === b.dataset.qrOpen); if (i) { qrSuccessFeedback(); showQRItemResult(i); } }
   if (b.dataset.qrStockCheck) { document.querySelectorAll('.qr-item-overlay').forEach(el => el.remove()); openQRStockCheck(b.dataset.qrStockCheck); return; }
   if (b.dataset.qrMove) {
-    document.querySelectorAll('.qr-item-overlay').forEach(el => el.remove());
-    const id = b.dataset.item; window.QR_SELECTED_ITEM = id;
-    location.hash = b.dataset.qrMove === 'in' ? '#stockin' : '#stockout';
+    const id = b.dataset.item, kind = b.dataset.qrMove;
+    openQRMoveModal(id, kind);
+    return;
   }
 });

@@ -125,7 +125,7 @@ tbody tr{transition:background .2s,box-shadow .2s}tbody tr:hover{background:colo
 .qr-check-btn{border-color:color-mix(in srgb,var(--warn) 55%,var(--bd))!important;color:var(--warn)!important}
 
 
-/* Larger item photo preview in Stock In / Stock Out forms */
+/* Larger item photo preview in stock movement forms */
 .move-item-card{display:flex;align-items:center;gap:16px;padding:12px;margin-top:8px;border:1px solid var(--bd);border-radius:16px;background:var(--p2);min-height:148px}
 .move-item-photo{width:132px;height:132px;flex:none;object-fit:contain;border-radius:12px;background:var(--p);border:1px solid var(--bd)}
 .move-item-no-photo{display:grid;place-content:center;justify-items:center;gap:7px;color:var(--mut)}
@@ -171,3 +171,7 @@ tbody tr{transition:background .2s,box-shadow .2s}tbody tr:hover{background:colo
 .dash-action:hover{border-color:var(--acc);transform:translateY(-2px);background:color-mix(in srgb,var(--acc) 7%,var(--p2))}
 @media(max-width:860px){.dash-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.dash-layout{grid-template-columns:1fr}}
 @media(max-width:700px){.dash-kpis{gap:9px}.dash-kpis .kpi{padding:13px}.dash-kpis .kpi .v{font-size:26px}.dash-layout{gap:11px}.dash-panel{padding:15px}.dash-action-grid{gap:8px}.dash-action{padding:10px;min-height:48px}}
+
+/* Direct stock movement modal launched from QR item result */
+.qr-move-photo{width:76px;height:76px;flex:none;object-fit:contain;border-radius:9px;background:var(--p);display:grid;place-items:center}
+.qr-move-overlay{z-index:65}

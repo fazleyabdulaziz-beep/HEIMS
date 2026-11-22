@@ -65,12 +65,8 @@ async function vDash() {
   const lowItems = Array.isArray(d.lowList) ? d.lowList : [];
   const action = (href, icon, label) => `<a class="dash-action" href="#${href}"><svg viewBox="0 0 24 24">${icon}</svg><span>${label}</span></a>`;
   const actions = [
-    action('qrscanner', '<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM20 14v2M20 20h-3M17 20v-1"/>', 'Scan QR'),
+    action('qrscanner', '<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM20 14v2M20 20h-3M17 20v-1"/>', 'QR Stock Movement'),
     action('inventory', '<path d="M21 8l-9-5-9 5v8l9 5 9-5zM3 8l9 5 9-5M12 13v8"/>', 'View Inventory'),
-    ...(can('ADMIN', 'SUPERVISOR', 'TECHNICIAN') ? [
-      action('stockin', '<path d="M12 19V5M5 12l7-7 7 7"/>', 'Stock In'),
-      action('stockout', '<path d="M12 5v14M19 12l-7 7-7-7"/>', 'Stock Out')
-    ] : []),
     ...(manager ? [action('stockverification', '<path d="M4 4h16v16H4zM8 8h8M8 12h4M8 16h8M16 12l1.5 1.5L20 10"/>', 'Stock Verification')] : []),
     action('orders', '<path d="M3 5h18v14H3zM7 9h10M7 13h6M16 16l2 2 3-4"/>', 'Stock Orders')
   ];
@@ -122,7 +118,7 @@ function drawTable() {
 }
 
 /* ---------- Router & events ---------- */
-const V = { dashboard: ['Dashboard', vDash], inventory: ['Inventory', vInv], qrscanner: ['QR Scanner', vQR], stockin: ['Stock In', () => vMove('in')], stockout: ['Stock Out', () => vMove('out')], adjust: ['Stock Adjustment', () => vMove('adj')], lowstock: ['Low Stock Alerts', vLow], history: ['Transaction History', vHist], audit: ['Audit Log', vAudit], racks: ['Rack Locations', vRacks], categories: ['Categories', vCats], settings: ['Settings', vSettings], orders: ['Stock Orders', vOrders], stockverification: ['Stock Verification', vStockVerification] };
+const V = { dashboard: ['Dashboard', vDash], inventory: ['Inventory', vInv], qrscanner: ['QR Stock Movement', vQR], lowstock: ['Low Stock Alerts', vLow], history: ['Transaction History', vHist], audit: ['Audit Log', vAudit], racks: ['Rack Locations', vRacks], categories: ['Categories', vCats], settings: ['Settings', vSettings], orders: ['Stock Orders', vOrders], stockverification: ['Stock Verification', vStockVerification] };
 async function route() {
   if (typeof stopQRScanner === 'function') await stopQRScanner();
   let k = (location.hash || '#dashboard').slice(1); if (!V[k]) k = 'dashboard';
