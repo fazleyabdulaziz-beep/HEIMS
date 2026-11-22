@@ -47,21 +47,49 @@ async function load(force) {
   const d = await api('inventory'); Object.assign(S, { items: d.items, cats: d.categories, racks: d.racks, loaded: true });
 }
 
-/* ---------- Dashboard ---------- */
+/* ---------- Minimal operational dashboard ---------- */
 async function vDash() {
-  const d = await api('dashboard'), k = d.kpi, a = d.availability, tot = Math.max(1, k.items);
-  const cards = [['Total Items', k.items], ['Total Quantity', k.qty], ['Categories', k.categories], ['Low Stock', k.low, 'warn'], ['Out of Stock', k.out, 'bad'], ['Recently Added', k.recent]];
-  const max = Math.max(1, ...Object.values(d.byCat)), em = t => `<div class="empty">${t}</div>`;
-  const seg = [['IN', 'ok'], ['LOW', 'warn'], ['OUT', 'bad'], ['UNVERIFIED', 'mut']];
-  $('#view').innerHTML = `<div class="kpis">${cards.map(c => `<div class="card kpi ${c[2] || ''}"><span class="mut">${c[0]}</span><div class="v">${c[1].toLocaleString()}</div></div>`).join('')}</div>
-  <div class="grid">
-   <div class="card"><h3>Stock Distribution by Category</h3>${Object.entries(d.byCat).sort((x, y) => y[1] - x[1]).map(([n, v]) => `<div class="row"><span>${esc(n)}</span><div class="trk"><i style="width:${v / max * 100}%"></i></div><b>${v}</b></div>`).join('') || em('No data')}</div>
-   <div class="card"><h3>Stock Availability Overview</h3><div class="trk stack">${seg.map(([s, c]) => `<i class="${c}-bg" style="width:${a[s] / tot * 100}%"></i>`).join('')}</div>
-    <div class="leg">${seg.map(([s]) => `<span>${ST[s][0]}: <b>${a[s]}</b></span>`).join('')}</div>
-    ${k.unverified ? `<p class="mut">${k.unverified} item(s) have no recorded quantity and need a physical count.</p>` : ''}</div>
-   <div class="card"><h3>Low Stock Summary</h3>${d.lowList.map(i => `<div class="li"><span>${esc(i.name)}<br><small class="mut">${esc(i.id)} · ${esc(i.rack)}</small></span>${badge(i.st)}</div>`).join('') || em('No low or out-of-stock items. Set minimum stock levels to enable alerts.')}</div>
-   <div class="card"><h3>Recent Inventory Activities</h3>${d.activity.map(r => `<div class="li"><span>${esc(r.Action)} <small class="mut">${esc(r.EntityID || r.After)}</small></span><small class="mut">${new Date(r.Timestamp).toLocaleString()}</small></div>`).join('') || em('No activity yet')}</div>
-   <div class="card"><h3>Top 10 Most Used Items</h3>${d.top.map(([n, v]) => `<div class="li"><span>${esc(n)}</span><b>${v}</b></div>`).join('') || em('No stock-out transactions yet')}</div></div>`; countUp();
+  const d = await api('dashboard'), k = d.kpi || {};
+  const user = JSON.parse(sessionStorage.user || '{}');
+  const manager = ['ADMIN', 'SUPERVISOR'].includes(user.role);
+  const lowOut = Number(k.lowOut ?? ((Number(k.low) || 0) + (Number(k.out) || 0))) || 0;
+  const pending = manager ? Number(k.pendingVerification || 0) : Number(k.unverified || 0);
+  const pendingLabel = manager ? 'Pending Verification' : 'Needs Initial Count';
+  const cards = [
+    ['Active Items', Number(k.items) || 0, ''],
+    ['Low / Out Stock', lowOut, lowOut ? 'bad' : ''],
+    [pendingLabel, pending, pending ? 'warn' : ''],
+    ['Pending Orders', Number(k.pendingOrders) || 0, k.pendingOrders ? 'warn' : '']
+  ];
+  const em = t => `<div class="empty dash-empty">${t}</div>`;
+  const lowItems = Array.isArray(d.lowList) ? d.lowList : [];
+  const action = (href, icon, label) => `<a class="dash-action" href="#${href}"><svg viewBox="0 0 24 24">${icon}</svg><span>${label}</span></a>`;
+  const actions = [
+    action('qrscanner', '<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM20 14v2M20 20h-3M17 20v-1"/>', 'Scan QR'),
+    action('inventory', '<path d="M21 8l-9-5-9 5v8l9 5 9-5zM3 8l9 5 9-5M12 13v8"/>', 'View Inventory'),
+    ...(can('ADMIN', 'SUPERVISOR', 'TECHNICIAN') ? [
+      action('stockin', '<path d="M12 19V5M5 12l7-7 7 7"/>', 'Stock In'),
+      action('stockout', '<path d="M12 5v14M19 12l-7 7-7-7"/>', 'Stock Out')
+    ] : []),
+    ...(manager ? [action('stockverification', '<path d="M4 4h16v16H4zM8 8h8M8 12h4M8 16h8M16 12l1.5 1.5L20 10"/>', 'Stock Verification')] : []),
+    action('orders', '<path d="M3 5h18v14H3zM7 9h10M7 13h6M16 16l2 2 3-4"/>', 'Stock Orders')
+  ];
+
+  $('#view').innerHTML = `
+    <div class="kpis dash-kpis">${cards.map(c => `<div class="card kpi ${c[2]}"><span class="mut">${c[0]}</span><div class="v">${c[1].toLocaleString()}</div></div>`).join('')}</div>
+    <div class="dash-layout">
+      <section class="card dash-panel">
+        <div class="dash-panel-head"><div><h3>Needs Attention</h3><p class="mut">Items that may need action</p></div><a class="dash-text-link" href="#lowstock">View all</a></div>
+        ${lowItems.length ? `<div class="dash-alert-list">${lowItems.map(i => `<div class="dash-alert-item"><div class="dash-alert-copy"><b>${esc(i.name)}</b><small class="mut">${esc(i.id)} · ${esc(i.rack)} · ${i.qty === '' ? 'Not counted' : `${esc(i.qty)} ${esc(i.unit || '')}`} · Min ${esc(i.min)}</small></div>${badge(i.st)}</div>`).join('')}</div>` : em('No low or out-of-stock items.')}
+        ${!manager && Number(k.unverified || 0) > 0 ? `<p class="dash-note">${Number(k.unverified)} item(s) still need an initial quantity count by a supervisor.</p>` : ''}
+        ${manager && Number(k.pendingVerification || 0) > 0 ? `<p class="dash-note">${Number(k.pendingVerification)} active item(s) have not been physically verified yet. <a href="#stockverification">Open Stock Verification</a></p>` : ''}
+      </section>
+      <section class="card dash-panel">
+        <div class="dash-panel-head"><div><h3>Quick Actions</h3><p class="mut">Common inventory tasks</p></div></div>
+        <div class="dash-action-grid">${actions.join('')}</div>
+      </section>
+    </div>`;
+  countUp();
 }
 
 /* ---------- Inventory ---------- */

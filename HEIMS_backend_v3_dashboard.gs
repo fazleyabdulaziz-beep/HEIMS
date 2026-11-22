@@ -1,0 +1,645 @@
+/**
+ * HEIMS backend - Google Apps Script (bound to the HEIMS Google Sheet)
+ * API: POST text/plain JSON {action, payload, token} -> {ok, data | error, code}
+ */
+const HEAD = {
+  ITEMS: ['ItemID','Name','Category','Subcategory','Brand','Model','Description','Quantity','Unit','Rack','MinStock','ImageURL','Remarks','Status','NeedsCount','CreatedAt','CreatedBy','UpdatedAt','UpdatedBy'],
+  TRANSACTIONS: ['TxnID','Timestamp','ItemID','ItemName','Type','PrevQty','Change','NewQty','Staff','Department','Reference','Supplier','Remarks','User'],
+  CATEGORIES: ['Name','SortOrder','Active'],
+  LOCATIONS: ['Rack','Description','Active'],
+  USERS: ['Username','Name','Role','PasswordHash','Salt','Active','CreatedAt'],
+  AUDIT_LOG: ['AuditID','Timestamp','User','Action','Entity','EntityID','Before','After'],
+  SETTINGS: ['Key','Value'],
+  ORDERS: ['OrderID','CreatedAt','ItemID','ItemName','QtyOrdered','QtyReceived','Unit','Supplier','Reference','ExpectedDate','Notes','Status','CreatedBy','UpdatedAt','UpdatedBy'],
+  STOCK_CHECKS: ['CheckID','Timestamp','ItemID','ItemName','SystemQty','CountedQty','Variance','IdentityMatch','Notes','CheckedBy','Result']
+};
+const CATS = ['Plumbing Spare Parts','Electrical Spare Parts','ACMV / HVAC Components','Lighting Components','Tools & Measuring Instruments','Consumables','General Maintenance','Door Hardware & Accessories'];
+const RACKS = ['1,1','1,2','1,3','1,4','1,5','1,6','2,1','2,2','2,3','2,4','3,1','3,2','3,3','3,4'];
+const SESSION_SECS = 21600; // 6h (CacheService max)
+
+/* ---------- ROUTER ---------- */
+const API = { login: login_, logout: logout_, resume: resume_, uploadImage: uploadImage_, inventory: inventory_, dashboard: dashboard_,
+  addItem: addItem_, editItem: editItem_, archiveItem: archiveItem_, restoreItem: restoreItem_,
+  addLocation: addLocation_, transferItems: transferItems_, history: history_, auditLog: auditLog_,
+  changePassword: changePassword_, listUsers: listUsers_, saveUser: saveUser_, resetPassword: resetPassword_,
+  addCategory: addCategory_, renameCategory: renameCategory_, getSettings: getSettings_, saveSettings: saveSettings_,
+  listOrders: listOrders_, createOrder: createOrder_, receiveOrder: receiveOrder_, cancelOrder: cancelOrder_, recordStockCheck: recordStockCheck_,
+  stockVerificationDashboard: stockVerificationDashboard_,
+  stockIn: (p, u) => move_(p, u, 'STOCK_IN'), stockOut: (p, u) => move_(p, u, 'STOCK_OUT'), adjustStock: (p, u) => move_(p, u, 'ADJUSTMENT') };
+
+function doGet() { return ContentService.createTextOutput('HEIMS API OK'); }
+
+const READ_ACTIONS_ = ['inventory','dashboard','history','auditLog','listOrders','listUsers','getSettings','stockVerificationDashboard'];
+function clearSheetCache_() {
+  const c = CacheService.getScriptCache();
+  ['ITEMS','TRANSACTIONS','CATEGORIES','LOCATIONS','AUDIT_LOG','SETTINGS','ORDERS','STOCK_CHECKS']
+    .forEach(n => c.remove('rows_' + n));
+  c.remove('dashboard_stockout_usage');
+}
+function doPost(e) {
+  let out, action = '';
+  try {
+    const r = JSON.parse(e.postData.contents), fn = API[r.action]; action = r.action;
+    if (!fn) throw new Error('Unknown action');
+    // Clear before writes so validation and calculations use current sheet contents.
+    if (action && READ_ACTIONS_.indexOf(action) < 0 && !['login','resume','logout'].includes(action)) clearSheetCache_();
+    const user = ['login', 'resume'].includes(action) ? null : session_(r.token);
+    out = { ok: true, data: fn(r.payload || {}, user, r.token) };
+  } catch (err) {
+    out = { ok: false, error: err.message, code: err.code || 'ERR' };
+  } finally {
+    // Also invalidate after failed writes: some multi-step operations may have written before an error.
+    if (action && READ_ACTIONS_.indexOf(action) < 0 && !['login','resume','logout'].includes(action)) clearSheetCache_();
+  }
+  return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
+}
+
+/* ---------- HELPERS ---------- */
+function sheet_(n) { return SpreadsheetApp.getActive().getSheetByName(n); }
+function rows_(n) {
+  // USERS stays live so account deactivation and role changes take effect immediately.
+  const cache = CacheService.getScriptCache(), key = 'rows_' + n;
+  if (n !== 'USERS') {
+    const saved = cache.get(key);
+    if (saved) { try { return JSON.parse(saved); } catch (e) { cache.remove(key); } }
+  }
+  const v = sheet_(n).getDataRange().getValues(), h = v.shift();
+  const data = v.filter(r => r[0] !== '').map(r => Object.fromEntries(h.map((k, i) => [k, r[i] instanceof Date ? r[i].toISOString() : r[i]])));
+  if (n !== 'USERS') {
+    const packed = JSON.stringify(data);
+    // Static lookup sheets can live longer; write endpoints invalidate all sheet caches.
+    const ttl = ['CATEGORIES', 'LOCATIONS', 'SETTINGS'].includes(n) ? 60 : 15;
+    // Apps Script cache entries have a size limit; skip oversized sheets safely.
+    if (packed.length < 95000) { try { cache.put(key, packed, ttl); } catch (e) {} }
+  }
+  return data;
+}
+
+// Read only the tail of a sheet while preserving the same row-object format as rows_().
+function lastRows_(n, limit) {
+  const sh = sheet_(n), last = sh.getLastRow();
+  if (last < 2 || limit <= 0) return [];
+  const start = Math.max(2, last - limit + 1);
+  const values = sh.getRange(start, 1, last - start + 1, sh.getLastColumn()).getValues();
+  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  return values.filter(r => r[0] !== '').map(r =>
+    Object.fromEntries(headers.map((k, i) => [k, r[i] instanceof Date ? r[i].toISOString() : r[i]]))
+  );
+}
+function setting_(k, d) { const r = rows_('SETTINGS').find(x => x.Key === k); return r ? r.Value : d; }
+function hash_(pw, salt) { return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, salt + pw)); }
+function status_(i) {
+  if (i.Quantity === '' || i.Quantity === null) return 'UNVERIFIED'; // never invent a quantity
+  const q = Number(i.Quantity), m = Number(i.MinStock) || 0;
+  return q <= 0 ? 'OUT' : q <= m ? 'LOW' : 'IN';
+}
+function authErr_(m) { const e = new Error(m); e.code = 'AUTH'; return e; }
+
+/* ---------- AUTH ---------- */
+function session_(token) {
+  const s = token && CacheService.getScriptCache().get('s_' + token);
+  if (!s) throw authErr_('Session expired. Please log in again.');
+  const sess = JSON.parse(s), cu = rows_('USERS').find(x => x.Username === sess.username && x.Active === true);
+  if (!cu) throw authErr_('Account disabled or removed.');   // re-check on every request
+  return { username: cu.Username, name: cu.Name, role: cu.Role };
+}
+function login_(p) {
+  const c = CacheService.getScriptCache(), k = 'f_' + String(p.username).toLowerCase();
+  if (Number(c.get(k)) >= 5) throw new Error('Too many failed attempts. Try again in 10 minutes.');
+  const u = rows_('USERS').find(x => String(x.Username).toLowerCase() === String(p.username).trim().toLowerCase() && x.Active === true);
+  if (!u || hash_(String(p.password), u.Salt) !== u.PasswordHash) {
+    c.put(k, String(Number(c.get(k)) + 1), 600);
+    throw new Error('Invalid username or password');
+  }
+  c.remove(k);
+  const out = newSession_(u);
+  if (p.remember === true) out.rt = newDevice_(u.Username);
+  return out;
+}
+function logout_(p, u, token) {
+  CacheService.getScriptCache().remove('s_' + token);
+  if (p.rt) PropertiesService.getScriptProperties().deleteProperty(dkey_(p.rt));
+  return true;
+}
+
+/* ---------- Remember this phone (device key, no password stored) ---------- */
+const DEV_DAYS = 30;
+function newSession_(u) {
+  const token = Utilities.getUuid() + Utilities.getUuid(), user = { username: u.Username, name: u.Name, role: u.Role };
+  CacheService.getScriptCache().put('s_' + token, JSON.stringify(user), SESSION_SECS);
+  return { token: token, user: user, hotel: setting_('HOTEL_NAME', 'Hotel Engineering') };
+}
+function dkey_(rt) { return 'd_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(rt))).slice(0, 43); }
+function newDevice_(un) {
+  const rt = Utilities.getUuid() + Utilities.getUuid();
+  PropertiesService.getScriptProperties().setProperty(dkey_(rt), JSON.stringify({ u: un, exp: Date.now() + DEV_DAYS * 864e5 }));
+  return rt;
+}
+function revokeDevices_(un) {                    // also sweeps expired keys
+  const sp = PropertiesService.getScriptProperties(), all = sp.getProperties();
+  Object.keys(all).forEach(k => {
+    if (k.indexOf('d_') !== 0) return;
+    try { const d = JSON.parse(all[k]); if (String(d.u).toLowerCase() === String(un).toLowerCase() || d.exp < Date.now()) sp.deleteProperty(k); }
+    catch (e) { sp.deleteProperty(k); }
+  });
+}
+function resume_(p) {
+  const sp = PropertiesService.getScriptProperties(), k = dkey_(p.rt), raw = p.rt && sp.getProperty(k);
+  if (!raw) throw authErr_('Please sign in again.');
+  const d = JSON.parse(raw);
+  const u = rows_('USERS').find(x => String(x.Username).toLowerCase() === String(d.u).toLowerCase() && x.Active === true);
+  if (d.exp < Date.now() || !u) { sp.deleteProperty(k); throw authErr_('Please sign in again.'); }
+  d.exp = Date.now() + DEV_DAYS * 864e5; sp.setProperty(k, JSON.stringify(d));   // sliding 30 days
+  return newSession_(u);
+}
+
+/* ---------- Item photos (saved to Google Drive, shown in the app) ---------- */
+function uploadImage_(p, u) {
+  need_(u, WRITE);
+  const m = /^data:image\/jpeg;base64,([A-Za-z0-9+\/=]+)$/.exec(String(p.data || ''));
+  if (!m || m[1].length > 1500000) throw new Error('Photo must be a JPEG under about 1 MB');
+  const props = PropertiesService.getScriptProperties(); let folder = null;
+  try { const id = props.getProperty('IMG_FOLDER'); folder = id ? DriveApp.getFolderById(id) : null; } catch (e) { folder = null; }
+  if (!folder) { folder = DriveApp.createFolder('HEIMS Item Photos'); props.setProperty('IMG_FOLDER', folder.getId()); }
+  const f = folder.createFile(Utilities.newBlob(Utilities.base64Decode(m[1]), 'image/jpeg', 'item-' + Date.now() + '.jpg'));
+  f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  return { url: 'https://drive.google.com/thumbnail?id=' + f.getId() + '&sz=w1000' };
+}
+
+/* ---------- READ ENDPOINTS ---------- */
+function activeItems_() {
+  return rows_('ITEMS').filter(i => i.Status === 'ACTIVE').map(i => Object.assign(i, { st: status_(i) }));
+}
+function inventory_(p) {
+  return {
+    items: p && p.archived === true ? rows_('ITEMS').filter(i => i.Status === 'ARCHIVED').map(i => Object.assign(i, { st: status_(i) })) : activeItems_(),
+    categories: rows_('CATEGORIES').filter(c => c.Active === true).sort((a, b) => a.SortOrder - b.SortOrder).map(c => c.Name),
+    racks: rows_('LOCATIONS').filter(l => l.Active === true).map(l => l.Rack)
+  };
+}
+function stockOutUsage_() {
+  const cache = CacheService.getScriptCache(), key = 'dashboard_stockout_usage';
+  const saved = cache.get(key);
+  if (saved) { try { return JSON.parse(saved); } catch (e) { cache.remove(key); } }
+
+  const used = {};
+  rows_('TRANSACTIONS').forEach(t => {
+    if (t.Type === 'STOCK_OUT') {
+      used[t.ItemName] = (used[t.ItemName] || 0) + Math.abs(Number(t.Change) || 0);
+    }
+  });
+  try { cache.put(key, JSON.stringify(used), 60); } catch (e) {}
+  return used;
+}
+
+function dashboard_(p, u) {
+  // Minimal operational summary: do not scan transaction history or build chart datasets.
+  const it = activeItems_();
+  const av = { IN: 0, LOW: 0, OUT: 0, UNVERIFIED: 0 };
+  it.forEach(i => av[i.st]++);
+
+  // Match the Stock Verification page's definition: an item is checked if it has
+  // at least one recorded physical verification. Reads use the normal short cache.
+  const checkSheet = sheet_('STOCK_CHECKS');
+  const checks = checkSheet ? rows_('STOCK_CHECKS') : [];
+  const checkedIds = new Set(checks.map(c => String(c.ItemID)));
+  const pendingVerification = it.filter(i => !checkedIds.has(String(i.ItemID))).length;
+
+  const orderSheet = sheet_('ORDERS');
+  const orders = orderSheet ? rows_('ORDERS') : [];
+  const pendingOrders = orders.filter(o => !['RECEIVED', 'CANCELLED'].includes(String(o.Status).toUpperCase())).length;
+
+  const lowList = it
+    .filter(i => i.st === 'LOW' || i.st === 'OUT')
+    .sort((a, b) => (a.st === b.st ? Number(a.Quantity || 0) - Number(b.Quantity || 0) : (a.st === 'OUT' ? -1 : 1)))
+    .slice(0, 5)
+    .map(i => ({ id: i.ItemID, name: i.Name, qty: i.Quantity, unit: i.Unit, min: i.MinStock, rack: i.Rack, st: i.st }));
+
+  return {
+    kpi: {
+      items: it.length,
+      low: av.LOW,
+      out: av.OUT,
+      lowOut: av.LOW + av.OUT,
+      unverified: av.UNVERIFIED,
+      pendingVerification: pendingVerification,
+      pendingOrders: pendingOrders
+    },
+    lowList: lowList
+  };
+}
+
+
+/* ---------- WRITE ENDPOINTS (Phase 2) ---------- */
+const WRITE = ['ADMIN', 'SUPERVISOR'], MOVE = ['ADMIN', 'SUPERVISOR', 'TECHNICIAN'];
+function need_(u, roles) { if (!roles.includes(u.role)) throw new Error('Permission denied for role ' + u.role); }
+function clean_(s, max, req, label) {            // trim, cap length, block spreadsheet formula injection
+  s = String(s == null ? '' : s).trim().slice(0, max || 200);
+  if (req && !s) throw new Error(label + ' is required');
+  return /^[=+\-@]/.test(s) ? "'" + s : s;
+}
+function num_(v, label, min, blankOk) {
+  if (blankOk && (v === '' || v == null)) return '';
+  const n = Number(v);
+  if (v === '' || v == null || !isFinite(n) || n < min) throw new Error(label + (min > 0 ? ' must be greater than 0' : ' must be 0 or more'));
+  return Math.round(n * 100) / 100;
+}
+function nextId_(sn, prefix, w) {
+  const s = sheet_(sn), n = s.getLastRow() - 1; let m = 0;
+  if (n > 0) s.getRange(2, 1, n, 1).getValues().forEach(r => m = Math.max(m, parseInt(String(r[0]).replace(/\D/g, '')) || 0));
+  return prefix + String(m + 1).padStart(w, '0');
+}
+function locked_(p, fn) {                        // one writer at a time + duplicate-submit guard
+  const l = LockService.getScriptLock(); l.waitLock(20000);
+  try {
+    const c = CacheService.getScriptCache(), k = 'r_' + p.rid;
+    if (p.rid && c.get(k)) throw new Error('Duplicate submission ignored');
+    const r = fn(); if (p.rid) c.put(k, '1', 600); return r;
+  } finally { l.releaseLock(); }
+}
+function item_(id) {
+  const sh = sheet_('ITEMS'), v = sh.getDataRange().getValues(), h = v[0];
+  for (let i = 1; i < v.length; i++) if (v[i][0] === id) return { sh: sh, h: h, row: i + 1, o: Object.fromEntries(h.map((k, j) => [k, v[i][j]])) };
+  throw new Error('Item not found');
+}
+function upd_(it, o, u) {
+  // Write the complete item row in one Sheets operation instead of one setValue() per field.
+  o.UpdatedAt = new Date(); o.UpdatedBy = u.username;
+  const next = it.h.map(k => Object.prototype.hasOwnProperty.call(o, k) ? o[k] : it.o[k]);
+  it.sh.getRange(it.row, 1, 1, it.h.length).setValues([next]);
+}
+function txn_(i, type, prev, chg, nw, x, u) {
+  sheet_('TRANSACTIONS').appendRow([nextId_('TRANSACTIONS', 'TXN-', 6), new Date(), i.ItemID, i.Name, type, prev, chg, nw,
+    x.staff || u.name, x.dept || '', x.ref || '', x.supplier || '', x.remarks || '', u.username]);
+}
+function audit_(u, action, id, before, after, ent) {
+  sheet_('AUDIT_LOG').appendRow([nextId_('AUDIT_LOG', 'AUD-', 6), new Date(), u.username, action, ent || 'ITEM', id, JSON.stringify(before), JSON.stringify(after)]);
+}
+function itemFields_(p) {
+  const cat = clean_(p.category, 80, true, 'Category'), rack = clean_(p.rack, 40, true, 'Rack'), img = String(p.imageUrl || '').trim();
+  if (!rows_('CATEGORIES').some(c => c.Name === cat && c.Active === true)) throw new Error('Unknown category');
+  if (!rows_('LOCATIONS').some(l => l.Rack === rack && l.Active === true)) throw new Error('Unknown rack');
+  if (img && !/^https:\/\//i.test(img)) throw new Error('Image URL must start with https://');
+  return { Name: clean_(p.name, 150, true, 'Item name'), Category: cat, Subcategory: clean_(p.subcategory, 80), Brand: clean_(p.brand, 60),
+    Model: clean_(p.model, 60), Description: clean_(p.description, 300), Unit: clean_(p.unit, 20, true, 'Unit'), Rack: rack,
+    MinStock: num_(p.minStock || 0, 'Minimum stock', 0), ImageURL: img.slice(0, 500), Remarks: clean_(p.remarks, 300) };
+}
+function addItem_(p, u) {
+  need_(u, WRITE);
+  return locked_(p, () => {
+    const f = itemFields_(p), q = num_(p.quantity, 'Opening quantity', 0, true);
+    if (rows_('ITEMS').some(i => i.Status === 'ACTIVE' && String(i.Name).toLowerCase() === f.Name.toLowerCase() && i.Rack === f.Rack)) throw new Error('This item already exists in ' + f.Rack);
+    const id = nextId_('ITEMS', 'ITM-', 4), now = new Date();
+    sheet_('ITEMS').appendRow([id, f.Name, f.Category, f.Subcategory, f.Brand, f.Model, f.Description, q, f.Unit, f.Rack, f.MinStock, f.ImageURL, f.Remarks, 'ACTIVE', q === '', now, u.username, now, u.username]);
+    txn_({ ItemID: id, Name: f.Name }, 'ITEM_ADDED', 0, q === '' ? 0 : q, q, { remarks: q === '' ? 'Quantity not counted' : 'Opening stock' }, u);
+    audit_(u, 'ITEM_ADDED', id, '', f);
+    return { itemId: id };
+  });
+}
+function editItem_(p, u) {                       // quantity is NOT editable here: use stock adjustment
+  need_(u, WRITE);
+  return locked_(p, () => {
+    const it = item_(p.itemId); if (it.o.Status !== 'ACTIVE') throw new Error('Item is archived');
+    const f = itemFields_(p), before = {}, after = {};
+    Object.keys(f).forEach(k => { if (String(it.o[k]) !== String(f[k])) { before[k] = it.o[k]; after[k] = f[k]; } });
+    if (!Object.keys(after).length) return { changed: 0 };
+    upd_(it, f, u);
+    const cur = it.o.Quantity;
+    if (after.Rack) txn_(it.o, 'TRANSFER', cur, 0, cur, { remarks: before.Rack + ' -> ' + after.Rack }, u);
+    txn_(it.o, 'ITEM_EDITED', cur, 0, cur, { remarks: 'Changed: ' + Object.keys(after).join(', ') }, u);
+    audit_(u, 'ITEM_EDITED', p.itemId, before, after);
+    return { changed: Object.keys(after).length };
+  });
+}
+function archiveItem_(p, u) {                    // soft delete: row and history are kept
+  need_(u, WRITE);
+  return locked_(p, () => {
+    const it = item_(p.itemId); if (it.o.Status !== 'ACTIVE') throw new Error('Item already archived');
+    const why = clean_(p.reason, 200, true, 'Reason');
+    upd_(it, { Status: 'ARCHIVED' }, u);
+    txn_(it.o, 'ITEM_ARCHIVED', it.o.Quantity, 0, it.o.Quantity, { remarks: why }, u);
+    audit_(u, 'ITEM_ARCHIVED', p.itemId, { Status: 'ACTIVE' }, { Status: 'ARCHIVED', reason: why });
+    return true;
+  });
+}
+function recordStockCheck_(p, u) {
+  // Physical verification is restricted to the inventory owner roles. It records findings only;
+  // it never changes the live stock quantity automatically.
+  need_(u, WRITE);
+  return locked_(p, () => {
+    const it = item_(clean_(p.itemId, 40, true, 'Item ID'));
+    if (it.o.Status !== 'ACTIVE') throw new Error('Item is archived');
+    const counted = num_(p.countedQty, 'Physical counted quantity', 0);
+    const identity = String(p.identityMatch || '').toUpperCase();
+    if (!['YES', 'NO'].includes(identity)) throw new Error('Please confirm whether the physical item matches the system');
+    const systemQty = it.o.Quantity === '' ? '' : Number(it.o.Quantity);
+    const variance = systemQty === '' ? '' : Math.round((counted - systemQty) * 100) / 100;
+    const result = identity === 'NO' ? 'ITEM_MISMATCH' : (systemQty === '' ? 'SYSTEM_QTY_UNVERIFIED' : (variance === 0 ? 'MATCHED' : 'QTY_VARIANCE'));
+    const id = nextId_('STOCK_CHECKS', 'CHK-', 6);
+    sheet_('STOCK_CHECKS').appendRow([id, new Date(), it.o.ItemID, it.o.Name, systemQty, counted, variance, identity,
+      clean_(p.notes, 300), u.username, result]);
+    audit_(u, 'STOCK_CHECKED', it.o.ItemID,
+      { systemQty: systemQty, itemName: it.o.Name },
+      { countedQty: counted, variance: variance, identityMatch: identity, result: result, checkId: id }, 'STOCK_CHECK');
+    return { checkId: id, itemId: it.o.ItemID, itemName: it.o.Name, systemQty: systemQty, countedQty: counted, variance: variance, identityMatch: identity, result: result };
+  });
+}
+
+
+/* ---------- Stock verification dashboard ---------- */
+function stockVerificationDashboard_(p, u) {
+  need_(u, WRITE);
+  const sh = SpreadsheetApp.getActive().getSheetByName('STOCK_CHECKS');
+  if (!sh) throw new Error('STOCK_CHECKS sheet is missing. Run upgradeStockChecksSheet() once in Apps Script.');
+  const active = activeItems_();
+  const checks = rows_('STOCK_CHECKS').sort((a, b) => Date.parse(b.Timestamp) - Date.parse(a.Timestamp));
+  const latest = {};
+  checks.forEach(c => { if (!latest[c.ItemID]) latest[c.ItemID] = c; });
+  const activeIds = new Set(active.map(i => i.ItemID));
+  const current = active.map(i => ({ item: i, check: latest[i.ItemID] || null }));
+  const counts = { total: active.length, checked: 0, matched: 0, quantityVariance: 0, itemMismatch: 0, systemUnverified: 0 };
+  current.forEach(x => {
+    if (!x.check) return;
+    counts.checked++;
+    if (x.check.Result === 'MATCHED') counts.matched++;
+    else if (x.check.Result === 'QTY_VARIANCE') counts.quantityVariance++;
+    else if (x.check.Result === 'ITEM_MISMATCH') counts.itemMismatch++;
+    else if (x.check.Result === 'SYSTEM_QTY_UNVERIFIED') counts.systemUnverified++;
+  });
+  counts.pending = Math.max(0, counts.total - counts.checked);
+  return {
+    counts: counts,
+    latestChecks: checks.filter(c => activeIds.has(c.ItemID)).slice(0, 40).map(c => ({
+      checkId: c.CheckID, timestamp: c.Timestamp, itemId: c.ItemID, itemName: c.ItemName,
+      systemQty: c.SystemQty, countedQty: c.CountedQty, variance: c.Variance,
+      identityMatch: c.IdentityMatch, notes: c.Notes, checkedBy: c.CheckedBy, result: c.Result
+    }))
+  };
+}
+
+
+function move_(p, u, type) {                     // STOCK_IN | STOCK_OUT | ADJUSTMENT
+  need_(u, type === 'ADJUSTMENT' ? WRITE : MOVE);
+  return locked_(p, () => {
+    const it = item_(p.itemId); if (it.o.Status !== 'ACTIVE') throw new Error('Item is archived');
+    const prevRaw = it.o.Quantity, x = { remarks: clean_(p.remarks, 300) };
+    let nw, chg;
+    if (type === 'ADJUSTMENT') {
+      nw = num_(p.newQty, 'Counted quantity', 0); x.remarks = clean_(p.reason, 300, true, 'Reason');
+      chg = Math.round((nw - (Number(prevRaw) || 0)) * 100) / 100;
+    } else {
+      if (prevRaw === '') throw new Error('Quantity not counted yet. A supervisor must record a Stock Adjustment first.');
+      const q = num_(p.qty, 'Quantity', 0.01), prev = Number(prevRaw);
+      if (type === 'STOCK_OUT') {
+        if (q > prev) throw new Error('Insufficient stock. Available: ' + prev + ' ' + it.o.Unit);
+        Object.assign(x, { staff: clean_(p.staff, 80, true, 'Staff name / ID'), dept: clean_(p.dept, 80, true, 'Location used') });
+        chg = -q;
+      } else { Object.assign(x, { supplier: clean_(p.supplier, 80), ref: clean_(p.ref, 80) }); chg = q; }
+      nw = Math.round((prev + chg) * 100) / 100;
+    }
+    if (nw < 0) throw new Error('Stock cannot be negative');
+    upd_(it, { Quantity: nw, NeedsCount: false }, u);
+    txn_(it.o, type, prevRaw, chg, nw, x, u);
+    return { itemId: p.itemId, prev: prevRaw, qty: nw };
+  });
+}
+
+
+
+/* ---------- STOCK ORDERS ---------- */
+function listOrders_() {
+  return rows_('ORDERS').slice().reverse();
+}
+function createOrder_(p, u) {
+  need_(u, WRITE);
+  return locked_(p, () => {
+    const it = item_(clean_(p.itemId, 30, true, 'Item'));
+    if (it.o.Status !== 'ACTIVE') throw new Error('Item is archived');
+    const qty = num_(p.qty, 'Order quantity', 0.01);
+    const supplier = clean_(p.supplier, 100, true, 'Supplier');
+    const ref = clean_(p.reference, 100);
+    const expected = clean_(p.expectedDate, 20);
+    if (expected && !/^\d{4}-\d{2}-\d{2}$/.test(expected)) throw new Error('Invalid expected date');
+    const id = nextId_('ORDERS', 'ORD-', 6), now = new Date();
+    sheet_('ORDERS').appendRow([id, now, it.o.ItemID, it.o.Name, qty, 0, it.o.Unit, supplier, ref, expected, clean_(p.notes, 300), 'ORDERED', u.username, now, u.username]);
+    audit_(u, 'STOCK_ORDERED', id, '', { itemId: it.o.ItemID, qty: qty, supplier: supplier }, 'ORDER');
+    return { orderId: id };
+  });
+}
+function receiveOrder_(p, u) {
+  need_(u, WRITE);
+  return locked_(p, () => {
+    const sh = sheet_('ORDERS'), vals = sh.getDataRange().getValues(), h = vals[0];
+    const idx = vals.findIndex((r, i) => i > 0 && r[0] === p.orderId);
+    if (idx < 1) throw new Error('Order not found');
+    const row = idx + 1, o = Object.fromEntries(h.map((k, j) => [k, vals[idx][j]]));
+    if (['RECEIVED','CANCELLED'].includes(o.Status)) throw new Error('This order is already closed');
+    const remaining = Number(o.QtyOrdered) - Number(o.QtyReceived);
+    const q = num_(p.qty, 'Received quantity', 0.01);
+    if (q > remaining) throw new Error('Received quantity exceeds remaining order quantity (' + remaining + ')');
+    const it = item_(o.ItemID);
+    if (it.o.Quantity === '') throw new Error('Item quantity is not counted. A supervisor must count it first.');
+    const prev = Number(it.o.Quantity), nw = Math.round((prev + q) * 100) / 100;
+    upd_(it, { Quantity: nw, NeedsCount: false }, u);
+    txn_(it.o, 'STOCK_IN', prev, q, nw, { supplier: o.Supplier, ref: o.Reference, remarks: 'Received against ' + o.OrderID }, u);
+    const got = Number(o.QtyReceived) + q, status = got >= Number(o.QtyOrdered) ? 'RECEIVED' : 'PARTIAL';
+    sh.getRange(row, h.indexOf('QtyReceived') + 1).setValue(got);
+    sh.getRange(row, h.indexOf('Status') + 1).setValue(status);
+    sh.getRange(row, h.indexOf('UpdatedAt') + 1).setValue(new Date());
+    sh.getRange(row, h.indexOf('UpdatedBy') + 1).setValue(u.username);
+    audit_(u, 'ORDER_RECEIVED', o.OrderID, { received: o.QtyReceived }, { received: got, status: status }, 'ORDER');
+    return { received: got, remaining: Number(o.QtyOrdered) - got, status: status };
+  });
+}
+function cancelOrder_(p, u) {
+  need_(u, WRITE);
+  return locked_(p, () => {
+    const sh = sheet_('ORDERS'), vals = sh.getDataRange().getValues(), h = vals[0];
+    const idx = vals.findIndex((r, i) => i > 0 && r[0] === p.orderId);
+    if (idx < 1) throw new Error('Order not found');
+    const status = vals[idx][h.indexOf('Status')];
+    if (['RECEIVED','CANCELLED'].includes(status)) throw new Error('This order is already closed');
+    sh.getRange(idx + 1, h.indexOf('Status') + 1).setValue('CANCELLED');
+    sh.getRange(idx + 1, h.indexOf('UpdatedAt') + 1).setValue(new Date());
+    sh.getRange(idx + 1, h.indexOf('UpdatedBy') + 1).setValue(u.username);
+    audit_(u, 'ORDER_CANCELLED', p.orderId, { status: status }, { status: 'CANCELLED' }, 'ORDER');
+    return true;
+  });
+}
+
+
+/* ---------- PHASE 3: restore, racks, history ---------- */
+function restoreItem_(p, u) {
+  need_(u, WRITE);
+  return locked_(p, () => {
+    const it = item_(p.itemId); if (it.o.Status !== 'ARCHIVED') throw new Error('Item is not archived');
+    if (!rows_('LOCATIONS').some(l => l.Rack === it.o.Rack && l.Active === true)) throw new Error('Its rack is no longer active');
+    if (rows_('ITEMS').some(i => i.Status === 'ACTIVE' && i.Rack === it.o.Rack && String(i.Name).toLowerCase() === String(it.o.Name).toLowerCase())) throw new Error('An active item with the same name already exists in ' + it.o.Rack);
+    upd_(it, { Status: 'ACTIVE' }, u);
+    txn_(it.o, 'ITEM_RESTORED', it.o.Quantity, 0, it.o.Quantity, { remarks: 'Restored to active inventory' }, u);
+    audit_(u, 'ITEM_RESTORED', p.itemId, { Status: 'ARCHIVED' }, { Status: 'ACTIVE' });
+    return true;
+  });
+}
+function addLocation_(p, u) {
+  need_(u, WRITE);
+  return locked_(p, () => {
+    const n = clean_(p.name, 40, true, 'Location name'), d = clean_(p.description, 120);
+    if (rows_('LOCATIONS').some(l => String(l.Rack).toLowerCase() === n.toLowerCase())) throw new Error('Location already exists');
+    sheet_('LOCATIONS').appendRow([n, d, true]);
+    audit_(u, 'LOCATION_ADDED', n, '', { name: n, description: d }, 'LOCATION');
+    return true;
+  });
+}
+function transferItems_(p, u) {
+  need_(u, WRITE);
+  return locked_(p, () => {
+    const to = clean_(p.toRack, 40, true, 'Target rack'), ids = Array.isArray(p.itemIds) ? p.itemIds.slice(0, 100) : [];
+    if (!ids.length) throw new Error('Select at least one item');
+    if (!rows_('LOCATIONS').some(l => l.Rack === to && l.Active === true)) throw new Error('Unknown rack');
+    let n = 0;
+    ids.forEach(id => {
+      const it = item_(id); if (it.o.Status !== 'ACTIVE' || it.o.Rack === to) return;
+      upd_(it, { Rack: to }, u);
+      txn_(it.o, 'TRANSFER', it.o.Quantity, 0, it.o.Quantity, { remarks: it.o.Rack + ' -> ' + to }, u);
+      audit_(u, 'TRANSFER', id, { Rack: it.o.Rack }, { Rack: to });
+      n++;
+    });
+    return { moved: n };
+  });
+}
+function history_() { return rows_('TRANSACTIONS').slice(-2000).reverse(); }
+function auditLog_(p, u) { need_(u, WRITE); return rows_('AUDIT_LOG').slice(-500).reverse(); }
+
+
+/* ---------- PHASE 4: users, categories, settings ---------- */
+const ROLES = ['ADMIN', 'SUPERVISOR', 'TECHNICIAN', 'VIEWER'];
+function pwd_(s) { s = String(s || ''); if (s.length < 8 || s.length > 100) throw new Error('Password must be 8-100 characters'); return s; }
+function userRow_(name) {
+  const sh = sheet_('USERS'), v = sh.getDataRange().getValues(), h = v[0];
+  for (let i = 1; i < v.length; i++) if (String(v[i][0]).toLowerCase() === String(name).toLowerCase())
+    return { sh: sh, h: h, row: i + 1, o: Object.fromEntries(h.map((k, j) => [k, v[i][j]])) };
+  return null;
+}
+function setU_(r, o) { Object.keys(o).forEach(k => r.sh.getRange(r.row, r.h.indexOf(k) + 1).setValue(o[k])); }
+function setPw_(r, pw) { const salt = Utilities.getUuid(); setU_(r, { PasswordHash: hash_(pw, salt), Salt: salt }); revokeDevices_(r.o.Username); }
+function listUsers_(p, u) { need_(u, ['ADMIN']); return rows_('USERS').map(x => ({ username: x.Username, name: x.Name, role: x.Role, active: x.Active === true })); }
+function saveUser_(p, u) {
+  need_(u, ['ADMIN']);
+  return locked_(p, () => {
+    const name = clean_(p.name, 80, true, 'Full name'), role = String(p.role), un = String(p.username || '').trim().toLowerCase();
+    if (!ROLES.includes(role)) throw new Error('Invalid role');
+    if (!/^[a-z0-9._-]{3,30}$/.test(un)) throw new Error('Username: 3-30 characters (letters, numbers, . _ -)');
+    const ex = userRow_(un);
+    if (!p.edit) {
+      if (ex) throw new Error('Username already exists');
+      const pw = pwd_(p.password), salt = Utilities.getUuid();
+      sheet_('USERS').appendRow([un, name, role, hash_(pw, salt), salt, true, new Date()]);
+      audit_(u, 'USER_ADDED', un, '', { name: name, role: role }, 'USER'); return true;
+    }
+    if (!ex) throw new Error('User not found');
+    const active = String(p.active) === 'true';
+    const otherAdmins = rows_('USERS').filter(x => x.Role === 'ADMIN' && x.Active === true && String(x.Username).toLowerCase() !== un).length;
+    if (ex.o.Role === 'ADMIN' && (role !== 'ADMIN' || !active) && !otherAdmins) throw new Error('At least one active admin is required');
+    if (un === String(u.username).toLowerCase() && !active) throw new Error('You cannot deactivate your own account');
+    setU_(ex, { Name: name, Role: role, Active: active });
+    audit_(u, 'USER_EDITED', un, { name: ex.o.Name, role: ex.o.Role, active: ex.o.Active }, { name: name, role: role, active: active }, 'USER'); return true;
+  });
+}
+function resetPassword_(p, u) {
+  need_(u, ['ADMIN']);
+  return locked_(p, () => { const r = userRow_(p.username); if (!r) throw new Error('User not found'); setPw_(r, pwd_(p.password)); audit_(u, 'PASSWORD_RESET', r.o.Username, '', '', 'USER'); return true; });
+}
+function changePassword_(p, u) {
+  return locked_(p, () => {
+    const r = userRow_(u.username);
+    if (!r || hash_(String(p.current), r.o.Salt) !== r.o.PasswordHash) throw new Error('Current password is incorrect');
+    if (p.next === p.current) throw new Error('New password must be different');
+    setPw_(r, pwd_(p.next)); audit_(u, 'PASSWORD_CHANGED', u.username, '', '', 'USER'); return true;
+  });
+}
+function addCategory_(p, u) {
+  need_(u, WRITE);
+  return locked_(p, () => {
+    const n = clean_(p.name, 80, true, 'Category name'), all = rows_('CATEGORIES');
+    if (all.some(c => String(c.Name).toLowerCase() === n.toLowerCase())) throw new Error('Category already exists');
+    sheet_('CATEGORIES').appendRow([n, all.length + 1, true]); audit_(u, 'CATEGORY_ADDED', n, '', { name: n }, 'CATEGORY'); return true;
+  });
+}
+function renameCategory_(p, u) {                 // renames in CATEGORIES and on every item
+  need_(u, WRITE);
+  return locked_(p, () => {
+    const from = String(p.from), n = clean_(p.name, 80, true, 'Category name'), sh = sheet_('CATEGORIES'), v = sh.getDataRange().getValues();
+    const i = v.findIndex((r, k) => k > 0 && r[0] === from);
+    if (i < 0) throw new Error('Category not found');
+    if (v.some((r, k) => k > 0 && k !== i && String(r[0]).toLowerCase() === n.toLowerCase())) throw new Error('Category already exists');
+    sh.getRange(i + 1, 1).setValue(n);
+    const it = sheet_('ITEMS'), rows = Math.max(1, it.getLastRow() - 1), col = it.getRange(2, 3, rows, 1);
+    col.setValues(col.getValues().map(r => [r[0] === from ? n : r[0]]));
+    audit_(u, 'CATEGORY_RENAMED', from, { name: from }, { name: n }, 'CATEGORY'); return true;
+  });
+}
+function getSettings_() { const o = {}; rows_('SETTINGS').forEach(r => o[r.Key] = r.Value); return o; }
+function saveSettings_(p, u) {
+  need_(u, ['ADMIN']);
+  return locked_(p, () => {
+    const h = clean_(p.HOTEL_NAME, 80, true, 'Hotel name'), d = num_(p.RECENT_DAYS, 'Recent days', 1);
+    if (d > 90 || d % 1) throw new Error('Recent days must be a whole number from 1 to 90');
+    const sh = sheet_('SETTINGS'), v = sh.getDataRange().getValues();
+    [['HOTEL_NAME', h], ['RECENT_DAYS', d]].forEach(kv => { const i = v.findIndex(r => r[0] === kv[0]); if (i < 0) sh.appendRow(kv); else sh.getRange(i + 1, 2).setValue(kv[1]); });
+    audit_(u, 'SETTINGS_CHANGED', '', '', { HOTEL_NAME: h, RECENT_DAYS: d }, 'SETTINGS'); return true;
+  });
+}
+
+/* ---------- ONE-TIME SETUP (run from the Apps Script editor) ---------- */
+// Run once in Apps Script editor for an existing HEIMS spreadsheet before using Stock Orders.
+function upgradeOrdersSheet() {
+  const ss = SpreadsheetApp.getActive();
+  if (ss.getSheetByName('ORDERS')) return 'ORDERS sheet already exists.';
+  const sh = ss.insertSheet('ORDERS');
+  sh.getRange(1, 1, 1, HEAD.ORDERS.length).setValues([HEAD.ORDERS]).setFontWeight('bold');
+  sh.setFrozenRows(1);
+  return 'ORDERS sheet created. Stock Orders is ready.';
+}
+
+// Run once in Apps Script editor to add the physical stock verification log. Existing sheets/data are untouched.
+function upgradeStockChecksSheet() {
+  const ss = SpreadsheetApp.getActive();
+  if (ss.getSheetByName('STOCK_CHECKS')) return 'STOCK_CHECKS sheet already exists.';
+  const sh = ss.insertSheet('STOCK_CHECKS');
+  sh.getRange(1, 1, 1, HEAD.STOCK_CHECKS.length).setValues([HEAD.STOCK_CHECKS]).setFontWeight('bold');
+  sh.setFrozenRows(1);
+  return 'STOCK_CHECKS sheet created. QR Stock Check is ready.';
+}
+
+function setup() {
+  const ss = SpreadsheetApp.getActive();
+  if (ss.getSheetByName('ITEMS')) throw new Error('Already set up. Use a fresh spreadsheet.');
+  const now = new Date();
+  Object.keys(HEAD).forEach(n => {
+    const s = ss.insertSheet(n);
+    s.getRange(1, 1, 1, HEAD[n].length).setValues([HEAD[n]]).setFontWeight('bold');
+    s.setFrozenRows(1);
+  });
+  const old = ss.getSheetByName('Sheet1'); if (old) ss.deleteSheet(old);
+  const add = (n, r) => sheet_(n).getRange(2, 1, r.length, r[0].length).setValues(r);
+  add('CATEGORIES', CATS.map((c, i) => [c, i + 1, true]));
+  add('LOCATIONS', RACKS.map(r => ['Rack ' + r, '', true]));
+  add('ITEMS', SEED.map((s, i) => ['ITM-' + String(i + 1).padStart(4, '0'), s[2], s[3], s[1], s[4], s[5], '', s[6], s[7], 'Rack ' + s[0], 0, '', s[8], 'ACTIVE', s[6] === '', now, 'SYSTEM_SEED', now, 'SYSTEM_SEED']));
+  add('SETTINGS', [['HOTEL_NAME', 'Hotel Engineering'], ['RECENT_DAYS', 7]]);
+  add('AUDIT_LOG', [['AUD-000001', now, 'SYSTEM', 'DB_SETUP', 'SYSTEM', '', '', SEED.length + ' items imported']]);
+  const pw = Utilities.getUuid().slice(0, 8), salt = Utilities.getUuid();
+  add('USERS', [['admin', 'Administrator', 'ADMIN', hash_(pw, salt), salt, true, now]]);
+  Logger.log('SETUP DONE. Login -> username: admin | password: ' + pw);
+}
+
+/* Run from editor to add staff: addUser_('ali','Ali Bin Abu','TECHNICIAN','pass1234') ; roles: ADMIN | SUPERVISOR | TECHNICIAN | VIEWER */
+function addUser_(username, name, role, password) {
+  const salt = Utilities.getUuid();
+  sheet_('USERS').appendRow([username, name, role, hash_(password, salt), salt, true, new Date()]);
+}
+function authorizeDrive() {
+  const f = DriveApp.createFolder('HEIMS Item Photos');
+  PropertiesService.getScriptProperties().setProperty('IMG_FOLDER', f.getId());
+  Logger.log('Drive OK, folder id: ' + f.getId());
+}

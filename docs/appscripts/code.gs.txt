@@ -32,7 +32,9 @@ function doGet() { return ContentService.createTextOutput('HEIMS API OK'); }
 const READ_ACTIONS_ = ['inventory','dashboard','history','auditLog','listOrders','listUsers','getSettings','stockVerificationDashboard'];
 function clearSheetCache_() {
   const c = CacheService.getScriptCache();
-  ['ITEMS','TRANSACTIONS','CATEGORIES','LOCATIONS','AUDIT_LOG','SETTINGS','ORDERS','STOCK_CHECKS'].forEach(n => c.remove('rows_' + n));
+  ['ITEMS','TRANSACTIONS','CATEGORIES','LOCATIONS','AUDIT_LOG','SETTINGS','ORDERS','STOCK_CHECKS']
+    .forEach(n => c.remove('rows_' + n));
+  c.remove('dashboard_stockout_usage');
 }
 function doPost(e) {
   let out, action = '';
@@ -55,8 +57,7 @@ function doPost(e) {
 /* ---------- HELPERS ---------- */
 function sheet_(n) { return SpreadsheetApp.getActive().getSheetByName(n); }
 function rows_(n) {
-  // Cache read-only sheet snapshots briefly. USERS is deliberately excluded so account
-  // deactivation/role changes are checked against the live sheet on every request.
+  // USERS stays live so account deactivation and role changes take effect immediately.
   const cache = CacheService.getScriptCache(), key = 'rows_' + n;
   if (n !== 'USERS') {
     const saved = cache.get(key);
@@ -66,10 +67,24 @@ function rows_(n) {
   const data = v.filter(r => r[0] !== '').map(r => Object.fromEntries(h.map((k, i) => [k, r[i] instanceof Date ? r[i].toISOString() : r[i]])));
   if (n !== 'USERS') {
     const packed = JSON.stringify(data);
+    // Static lookup sheets can live longer; write endpoints invalidate all sheet caches.
+    const ttl = ['CATEGORIES', 'LOCATIONS', 'SETTINGS'].includes(n) ? 60 : 15;
     // Apps Script cache entries have a size limit; skip oversized sheets safely.
-    if (packed.length < 95000) { try { cache.put(key, packed, 15); } catch (e) {} }
+    if (packed.length < 95000) { try { cache.put(key, packed, ttl); } catch (e) {} }
   }
   return data;
+}
+
+// Read only the tail of a sheet while preserving the same row-object format as rows_().
+function lastRows_(n, limit) {
+  const sh = sheet_(n), last = sh.getLastRow();
+  if (last < 2 || limit <= 0) return [];
+  const start = Math.max(2, last - limit + 1);
+  const values = sh.getRange(start, 1, last - start + 1, sh.getLastColumn()).getValues();
+  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  return values.filter(r => r[0] !== '').map(r =>
+    Object.fromEntries(headers.map((k, i) => [k, r[i] instanceof Date ? r[i].toISOString() : r[i]]))
+  );
 }
 function setting_(k, d) { const r = rows_('SETTINGS').find(x => x.Key === k); return r ? r.Value : d; }
 function hash_(pw, salt) { return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, salt + pw)); }
@@ -162,19 +177,55 @@ function inventory_(p) {
     racks: rows_('LOCATIONS').filter(l => l.Active === true).map(l => l.Rack)
   };
 }
-function dashboard_() {
-  const it = activeItems_(), cut = Date.now() - Number(setting_('RECENT_DAYS', 7)) * 864e5;
-  const byCat = {}, av = { IN: 0, LOW: 0, OUT: 0, UNVERIFIED: 0 }, used = {};
-  let qty = 0;
-  it.forEach(i => { byCat[i.Category] = (byCat[i.Category] || 0) + (Number(i.Quantity) || 0); qty += Number(i.Quantity) || 0; av[i.st]++; });
-  rows_('TRANSACTIONS').filter(t => t.Type === 'STOCK_OUT').forEach(t => used[t.ItemName] = (used[t.ItemName] || 0) + Math.abs(Number(t.Change)));
+function stockOutUsage_() {
+  const cache = CacheService.getScriptCache(), key = 'dashboard_stockout_usage';
+  const saved = cache.get(key);
+  if (saved) { try { return JSON.parse(saved); } catch (e) { cache.remove(key); } }
+
+  const used = {};
+  rows_('TRANSACTIONS').forEach(t => {
+    if (t.Type === 'STOCK_OUT') {
+      used[t.ItemName] = (used[t.ItemName] || 0) + Math.abs(Number(t.Change) || 0);
+    }
+  });
+  try { cache.put(key, JSON.stringify(used), 60); } catch (e) {}
+  return used;
+}
+
+function dashboard_(p, u) {
+  // Minimal operational summary: do not scan transaction history or build chart datasets.
+  const it = activeItems_();
+  const av = { IN: 0, LOW: 0, OUT: 0, UNVERIFIED: 0 };
+  it.forEach(i => av[i.st]++);
+
+  // Match the Stock Verification page's definition: an item is checked if it has
+  // at least one recorded physical verification. Reads use the normal short cache.
+  const checkSheet = sheet_('STOCK_CHECKS');
+  const checks = checkSheet ? rows_('STOCK_CHECKS') : [];
+  const checkedIds = new Set(checks.map(c => String(c.ItemID)));
+  const pendingVerification = it.filter(i => !checkedIds.has(String(i.ItemID))).length;
+
+  const orderSheet = sheet_('ORDERS');
+  const orders = orderSheet ? rows_('ORDERS') : [];
+  const pendingOrders = orders.filter(o => !['RECEIVED', 'CANCELLED'].includes(String(o.Status).toUpperCase())).length;
+
+  const lowList = it
+    .filter(i => i.st === 'LOW' || i.st === 'OUT')
+    .sort((a, b) => (a.st === b.st ? Number(a.Quantity || 0) - Number(b.Quantity || 0) : (a.st === 'OUT' ? -1 : 1)))
+    .slice(0, 5)
+    .map(i => ({ id: i.ItemID, name: i.Name, qty: i.Quantity, unit: i.Unit, min: i.MinStock, rack: i.Rack, st: i.st }));
+
   return {
-    kpi: { items: it.length, qty: qty, categories: Object.keys(byCat).length, low: av.LOW, out: av.OUT, unverified: av.UNVERIFIED,
-           recent: it.filter(i => i.CreatedBy !== 'SYSTEM_SEED' && Date.parse(i.CreatedAt) >= cut).length },
-    byCat: byCat, availability: av,
-    lowList: it.filter(i => i.st === 'LOW' || i.st === 'OUT').slice(0, 10).map(i => ({ id: i.ItemID, name: i.Name, qty: i.Quantity, min: i.MinStock, rack: i.Rack, st: i.st })),
-    activity: rows_('AUDIT_LOG').slice(-8).reverse(),
-    top: Object.entries(used).sort((a, b) => b[1] - a[1]).slice(0, 10)
+    kpi: {
+      items: it.length,
+      low: av.LOW,
+      out: av.OUT,
+      lowOut: av.LOW + av.OUT,
+      unverified: av.UNVERIFIED,
+      pendingVerification: pendingVerification,
+      pendingOrders: pendingOrders
+    },
+    lowList: lowList
   };
 }
 
