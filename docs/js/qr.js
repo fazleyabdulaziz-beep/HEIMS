@@ -140,6 +140,85 @@ function drawQRSearch() {
   target.innerHTML = found.length ? found.map(i => `<button class="qr-search-hit" data-qr-open="${esc(i.ItemID)}"><span><b>${esc(i.Name)}</b><small class="mut">${esc(i.ItemID)} · ${esc(i.Rack)}</small></span>${badge(i.st)}</button>`).join('') : '<span class="mut sm">No matching items.</span>';
 }
 
+
+/* ---------- Bulk QR label printing (active items only) ---------- */
+let bulkQRSelected = new Set();
+function openBulkQRPrint() {
+  // Deliberately use S.items only. Archived records in S.archived are never offered for bulk printing.
+  const active = Array.isArray(S.items) ? S.items : [];
+  if (!active.length) { toast('No active inventory items available to print.', 'bad'); return; }
+  bulkQRSelected = new Set();
+  const m = document.createElement('div'); m.className = 'ov bulk-qr-overlay'; m.id = 'bulk-qr-modal';
+  m.innerHTML = `<section class="card bulk-qr-modal" role="dialog" aria-modal="true" aria-label="Bulk QR label printing">
+    <div class="qr-label-head"><div><h3>Bulk QR Label Printing</h3><p class="mut sm">Select only the active spare parts you want to print. Archived items are excluded.</p></div><button class="btn g sm" type="button" data-bulk-close>Close</button></div>
+    <input id="bulk-qr-search" type="search" placeholder="Search active item ID or name…" autocomplete="off">
+    <div class="bulk-qr-tools"><button class="btn g sm" type="button" id="bulk-qr-select-visible">Select visible</button><button class="btn g sm" type="button" id="bulk-qr-clear">Clear selection</button><span class="mut sm" id="bulk-qr-count">0 selected</span></div>
+    <div class="bulk-qr-list" id="bulk-qr-list"></div>
+    <div class="mf"><span class="mut sm">Only selected active items will be printed.</span><button class="btn" type="button" id="bulk-qr-print" disabled>Print selected QR labels</button></div>
+  </section>`;
+  document.body.append(m);
+  const list = m.querySelector('#bulk-qr-list');
+  const render = () => {
+    const q = m.querySelector('#bulk-qr-search').value.trim().toLowerCase();
+    const matches = active.filter(i => String(i.ItemID || '').toLowerCase().includes(q) || String(i.Name || '').toLowerCase().includes(q));
+    list.innerHTML = matches.length ? matches.map(i => `<label class="bulk-qr-row"><input type="checkbox" data-bulk-qr-item="${esc(i.ItemID)}" ${bulkQRSelected.has(i.ItemID) ? 'checked' : ''}><span class="bulk-qr-row-name"><b>${esc(i.Name)}</b><small class="mut">${esc(i.ItemID)} · ${esc(i.Rack || 'No rack assigned')}</small></span></label>`).join('') : '<div class="empty">No active items match your search.</div>';
+    m.querySelector('#bulk-qr-count').textContent = `${bulkQRSelected.size} selected · ${active.length} active items available`;
+    m.querySelector('#bulk-qr-print').disabled = bulkQRSelected.size === 0;
+  };
+  m.addEventListener('click', e => {
+    if (e.target === m || e.target.closest('[data-bulk-close]')) m.remove();
+    if (e.target.closest('#bulk-qr-select-visible')) { list.querySelectorAll('[data-bulk-qr-item]').forEach(c => bulkQRSelected.add(c.dataset.bulkQrItem)); render(); }
+    if (e.target.closest('#bulk-qr-clear')) { bulkQRSelected.clear(); render(); }
+    if (e.target.closest('#bulk-qr-print')) printBulkQRLabels(active.filter(i => bulkQRSelected.has(i.ItemID)), m);
+  });
+  m.addEventListener('change', e => {
+    const c = e.target.closest('[data-bulk-qr-item]'); if (!c) return;
+    if (c.checked) bulkQRSelected.add(c.dataset.bulkQrItem); else bulkQRSelected.delete(c.dataset.bulkQrItem);
+    m.querySelector('#bulk-qr-count').textContent = `${bulkQRSelected.size} selected · ${active.length} active items available`;
+    m.querySelector('#bulk-qr-print').disabled = bulkQRSelected.size === 0;
+  });
+  m.querySelector('#bulk-qr-search').addEventListener('input', render);
+  render();
+}
+
+async function makeBulkQRData(itemId) {
+  const host = document.createElement('div'); host.className = 'bulk-qr-temp';
+  document.body.append(host);
+  try {
+    new QRCode(host, { text: `HEIMS:${itemId}`, width: 180, height: 180, colorDark: '#111827', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
+    await new Promise(resolve => setTimeout(resolve, 35));
+    const canvas = host.querySelector('canvas'), img = host.querySelector('img');
+    if (canvas) return canvas.toDataURL('image/png');
+    if (img && img.complete) return img.src;
+    if (img) return await new Promise((resolve, reject) => { img.onload = () => resolve(img.src); img.onerror = reject; });
+    throw new Error(`Could not generate QR for ${itemId}`);
+  } finally { host.remove(); }
+}
+
+async function printBulkQRLabels(items, modalNode) {
+  if (!items.length) return;
+  if (typeof QRCode === 'undefined') { toast('QR generator unavailable. Check internet and refresh.', 'bad'); return; }
+  const btn = modalNode.querySelector('#bulk-qr-print'); btn.disabled = true; btn.textContent = 'Preparing labels…';
+  try {
+    const labels = [];
+    for (const i of items) {
+      const src = await makeBulkQRData(i.ItemID);
+      labels.push(`<div class="print-qr-label"><img src="${src}" alt="QR code for ${esc(i.ItemID)}"><div><b>${esc(i.Name)}</b><strong>${esc(i.ItemID)}</strong><span>${esc(i.Rack || 'No rack assigned')}</span><small>HEIMS · Hotel Engineering</small></div></div>`);
+    }
+    let root = document.getElementById('qr-bulk-print-root'); if (root) root.remove();
+    root = document.createElement('div'); root.id = 'qr-bulk-print-root'; root.className = 'bulk-qr-print';
+    root.innerHTML = `<div class="bulk-qr-print-grid">${labels.join('')}</div>`;
+    document.body.append(root);
+    modalNode.remove();
+    const cleanup = () => { root.remove(); window.removeEventListener('afterprint', cleanup); };
+    window.addEventListener('afterprint', cleanup);
+    setTimeout(() => window.print(), 180);
+  } catch (err) {
+    toast(err.message || 'Could not prepare QR labels.', 'bad');
+    btn.disabled = false; btn.textContent = 'Print selected QR labels';
+  }
+}
+
 function showQRLabel(itemId) {
   const i = S.items.find(x => x.ItemID === itemId) || (S.archived || []).find(x => x.ItemID === itemId);
   if (!i) { toast('Item not found. Refresh inventory and try again.', 'bad'); return; }
@@ -174,6 +253,7 @@ function printQRLabel(i, codeNode) {
 
 document.addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
+  if (b.id === 'bulk-qr-open') { openBulkQRPrint(); return; }
   if (b.dataset.qrOpen) { const i = S.items.find(x => x.ItemID === b.dataset.qrOpen); if (i) showQRItemResult(i); }
   if (b.dataset.qrStockCheck) { document.querySelectorAll('.qr-item-overlay').forEach(el => el.remove()); openQRStockCheck(b.dataset.qrStockCheck); return; }
   if (b.dataset.qrMove) {

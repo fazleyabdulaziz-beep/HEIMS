@@ -69,7 +69,7 @@ async function vInv() {
   S.showArch = false; await load(false);
   const o = (a, l) => `<option value="">${l}</option>` + a.map(x => `<option>${esc(x)}</option>`).join('');
   const brands = [...new Set(S.items.map(i => i.Brand).filter(Boolean))].sort();
-  $('#view').innerHTML = `${can('ADMIN', 'SUPERVISOR') ? '<div class="top"><button class="btn g" id="arch">Show archived</button><button class="btn" id="add">+ Add Item</button></div>' : ''}<div class="bar"><input id="f-q" placeholder="Search Item ID or item name…">
+  $('#view').innerHTML = `${can('ADMIN', 'SUPERVISOR') ? '<div class="top"><button class="btn g" id="arch">Show archived</button><button class="btn g" id="bulk-qr-open">Bulk QR Print</button><button class="btn" id="add">+ Add Item</button></div>' : ''}<div class="bar"><input id="f-q" placeholder="Search Item ID or item name…">
    <select id="f-cat">${o(S.cats, 'All categories')}</select><select id="f-rack">${o(S.racks, 'All racks')}</select>
    <select id="f-st"><option value="">All status</option>${Object.entries(ST).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select>
    <select id="f-brand">${o(brands, 'All brands')}</select><button class="btn g" id="clr">Clear all</button></div><div id="tbl"></div>`;

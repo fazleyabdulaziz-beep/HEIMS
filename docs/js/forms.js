@@ -76,7 +76,18 @@ async function vMove(k) {
    <div class="err"></div><button class="btn" style="margin-top:12px">${c.t}</button></form>`;
   const f = $('#mv'), find = () => S.items.find(i => i.ItemID === f.item.value.split(' — ')[0].trim());
   if (window.QR_SELECTED_ITEM) { const picked = S.items.find(i => i.ItemID === window.QR_SELECTED_ITEM); if (picked) f.item.value = `${picked.ItemID} — ${picked.Name}`; window.QR_SELECTED_ITEM = null; }
-  f.item.oninput = () => { const i = find(); $('#cur').innerHTML = i ? `<span class="nm">${thumb(i)}<span>Current: <b>${i.Quantity === '' ? 'not counted' : esc(i.Quantity) + ' ' + esc(i.Unit)}</b> · ${esc(i.Rack)}</span></span>` : '&nbsp;'; };
+  f.item.oninput = () => {
+    const i = find();
+    if (!i) { $('#cur').innerHTML = '&nbsp;'; return; }
+    if (k === 'in' || k === 'out') {
+      const photo = i.ImageURL
+        ? `<img class="move-item-photo" loading="lazy" src="${esc(imgUrl(i.ImageURL, 640))}" alt="${esc(i.Name)}">`
+        : `<span class="move-item-photo move-item-no-photo">${NOPIC}<small>No photo</small></span>`;
+      $('#cur').innerHTML = `<div class="move-item-card">${photo}<div class="move-item-info"><b class="move-item-name">${esc(i.Name)}</b><small class="mut">${esc(i.ItemID)} · ${esc(i.Category || '-')}</small><div class="move-item-meta"><span>Current stock</span><strong>${i.Quantity === '' ? 'Not counted' : esc(i.Quantity) + ' ' + esc(i.Unit)}</strong></div><small class="mut">Rack: ${esc(i.Rack || '-')}</small></div></div>`;
+    } else {
+      $('#cur').innerHTML = `<span class="nm">${thumb(i)}<span>Current: <b>${i.Quantity === '' ? 'not counted' : esc(i.Quantity) + ' ' + esc(i.Unit)}</b> · ${esc(i.Rack)}</span></span>`;
+    }
+  };
   f.item.oninput();
   f.onsubmit = async e => {
     e.preventDefault(); const i = find(), er = f.querySelector('.err'), b = f.querySelector('button'); er.textContent = '';
@@ -90,6 +101,7 @@ async function vMove(k) {
 async function toggleArch(b) {
   S.showArch = !S.showArch; b.textContent = S.showArch ? 'Show active' : 'Show archived'; S.page = 1;
   if (S.showArch) { try { S.archived = (await api('inventory', { archived: true })).items; } catch (e) { toast(e.message, 'bad'); S.showArch = false; b.textContent = 'Show archived'; } }
+  const bulkBtn = document.getElementById('bulk-qr-open'); if (bulkBtn) bulkBtn.hidden = S.showArch;
   drawTable();
 }
 function restore(id) {
