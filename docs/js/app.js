@@ -15,7 +15,7 @@ function showItem(id) {
   const m = document.createElement('div'); m.className = 'ov';
   m.innerHTML = `<div class="card md det"><div class="hero">${i.ImageURL ? `<img alt="${esc(i.Name)}" src="${esc(imgUrl(i.ImageURL, 1000))}">` : `<div class="noimg">${NOPIC}<span>No photo yet</span></div>`}</div>
    <div class="dh"><div><h3>${esc(i.Name)}</h3><span class="id">${esc(i.ItemID)}</span></div>${badge(i.st)}</div>
-   <dl>${rows.map(r => `<dt>${r[0]}</dt><dd>${esc(r[1])}</dd>`).join('')}</dl><div class="mf"><button class="btn g" data-x>Close</button></div></div>`;
+   <dl>${rows.map(r => `<dt>${r[0]}</dt><dd>${esc(r[1])}</dd>`).join('')}</dl><div class="mf"><button class="btn g" data-qr-label="${esc(i.ItemID)}">QR Label</button><button class="btn g" data-x>Close</button></div></div>`;
   document.body.append(m); m.onclick = e => { if (e.target === m || e.target.dataset.x !== undefined) m.remove(); };
 }
 
@@ -83,16 +83,17 @@ function drawTable() {
   const pages = Math.max(1, Math.ceil(rows.length / PER)); S.page = Math.min(S.page, pages);
   const cur = rows.slice((S.page - 1) * PER, S.page * PER);
   $('#tbl').innerHTML = !rows.length ? '<div class="card empty">No items match your filters.</div>' :
-    `<div class="card" style="padding:4px"><table><thead><tr><th>ID</th><th>Item</th><th>Category</th><th>Brand / Model</th><th>Rack</th><th class="n">Qty</th><th class="n">Min</th><th>Status</th>${A ? '<th></th>' : ''}</tr></thead><tbody>${cur.map(i => `<tr data-open="${esc(i.ItemID)}">
+    `<div class="card" style="padding:4px"><table><thead><tr><th>ID</th><th>Item</th><th>Category</th><th>Brand / Model</th><th>Rack</th><th class="n">Qty</th><th class="n">Min</th><th>Status</th><th>Actions</th></tr></thead><tbody>${cur.map(i => `<tr data-open="${esc(i.ItemID)}">
     <td data-l="ID" class="id">${esc(i.ItemID)}</td><td data-l="Item" class="nm">${thumb(i)}<b>${esc(i.Name)}</b></td><td data-l="Category">${esc(i.Category)}</td>
     <td data-l="Brand / Model">${esc([i.Brand, i.Model].filter(Boolean).join(' / ') || '-')}</td><td data-l="Rack">${esc(i.Rack)}</td>
-    <td data-l="Qty" class="n">${i.Quantity === '' ? '?' : esc(i.Quantity) + ' ' + esc(i.Unit)}</td><td data-l="Min" class="n">${esc(i.MinStock)}</td><td data-l="Status">${badge(i.st)}</td>${A ? `<td data-l="">${S.showArch ? `<button class="btn g sm" data-restore="${esc(i.ItemID)}">Restore</button>` : `<button class="btn g sm" data-edit="${esc(i.ItemID)}">Edit</button> <button class="btn g sm" data-arch="${esc(i.ItemID)}">Archive</button>`}</td>` : ''}</tr>`).join('')}</tbody></table></div>
+    <td data-l="Qty" class="n">${i.Quantity === '' ? '?' : esc(i.Quantity) + ' ' + esc(i.Unit)}</td><td data-l="Min" class="n">${esc(i.MinStock)}</td><td data-l="Status">${badge(i.st)}</td><td data-l="Actions"><button class="btn g sm" data-qr-label="${esc(i.ItemID)}">QR Label</button> ${A ? (S.showArch ? `<button class="btn g sm" data-restore="${esc(i.ItemID)}">Restore</button>` : `<button class="btn g sm" data-edit="${esc(i.ItemID)}">Edit</button> <button class="btn g sm" data-arch="${esc(i.ItemID)}">Archive</button>`) : ''}</td></tr>`).join('')}</tbody></table></div>
     <div class="pg"><span class="mut">${rows.length} item(s) · page ${S.page}/${pages}</span><div><button class="btn g" data-p="-1" ${S.page < 2 ? 'disabled' : ''}>Prev</button><button class="btn g" data-p="1" ${S.page >= pages ? 'disabled' : ''}>Next</button></div></div>`;
 }
 
 /* ---------- Router & events ---------- */
-const V = { dashboard: ['Dashboard', vDash], inventory: ['Inventory', vInv], stockin: ['Stock In', () => vMove('in')], stockout: ['Stock Out', () => vMove('out')], adjust: ['Stock Adjustment', () => vMove('adj')], lowstock: ['Low Stock Alerts', vLow], history: ['Transaction History', vHist], audit: ['Audit Log', vAudit], racks: ['Rack Locations', vRacks], categories: ['Categories', vCats], settings: ['Settings', vSettings], orders: ['Stock Orders', vOrders] };
+const V = { dashboard: ['Dashboard', vDash], inventory: ['Inventory', vInv], qrscanner: ['QR Scanner', vQR], stockin: ['Stock In', () => vMove('in')], stockout: ['Stock Out', () => vMove('out')], adjust: ['Stock Adjustment', () => vMove('adj')], lowstock: ['Low Stock Alerts', vLow], history: ['Transaction History', vHist], audit: ['Audit Log', vAudit], racks: ['Rack Locations', vRacks], categories: ['Categories', vCats], settings: ['Settings', vSettings], orders: ['Stock Orders', vOrders] };
 async function route() {
+  if (typeof stopQRScanner === 'function') await stopQRScanner();
   let k = (location.hash || '#dashboard').slice(1); if (!V[k]) k = 'dashboard';
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.hash === '#' + k));
   moveInd(); $('#title').textContent = V[k][0]; $('#side').classList.remove('open');

@@ -51,6 +51,7 @@ function archive(id) {
 }
 document.addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.qrLabel) { showQRLabel(b.dataset.qrLabel); return; }
   if (b.id === 'ph-pick') $('#ph').click();
   if (b.id === 'ph-rm') { PIC.data = null; document.querySelector('[name=imageUrl]').value = ''; $('#ph-prev').replaceWith(Object.assign(document.createElement('span'), { id: 'ph-prev', className: 'th lg ph0', innerHTML: NOPIC })); b.hidden = true; }
   if (b.id === 'add') itemForm();
@@ -74,7 +75,9 @@ async function vMove(k) {
    ${c.f.map(([n, l, t, r]) => `<label>${l}${r ? ' *' : ''}</label><input name="${n}" type="${t || 'text'}" ${t === 'number' ? `min="${min}" step="any"` : ''} ${r ? 'required' : ''} value="${n === 'staff' ? esc(u.name) : ''}">`).join('')}
    <div class="err"></div><button class="btn" style="margin-top:12px">${c.t}</button></form>`;
   const f = $('#mv'), find = () => S.items.find(i => i.ItemID === f.item.value.split(' — ')[0].trim());
+  if (window.QR_SELECTED_ITEM) { const picked = S.items.find(i => i.ItemID === window.QR_SELECTED_ITEM); if (picked) f.item.value = `${picked.ItemID} — ${picked.Name}`; window.QR_SELECTED_ITEM = null; }
   f.item.oninput = () => { const i = find(); $('#cur').innerHTML = i ? `<span class="nm">${thumb(i)}<span>Current: <b>${i.Quantity === '' ? 'not counted' : esc(i.Quantity) + ' ' + esc(i.Unit)}</b> · ${esc(i.Rack)}</span></span>` : '&nbsp;'; };
+  f.item.oninput();
   f.onsubmit = async e => {
     e.preventDefault(); const i = find(), er = f.querySelector('.err'), b = f.querySelector('button'); er.textContent = '';
     if (!i) { er.textContent = 'Select a valid item from the list'; return; }
