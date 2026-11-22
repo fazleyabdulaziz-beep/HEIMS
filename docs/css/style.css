@@ -189,5 +189,12 @@ tbody tr{transition:background .2s,box-shadow .2s}tbody tr:hover{background:colo
 .qr-success-balance small,.qr-success-balance span{font-size:12px;color:var(--mut)}
 .qr-success-balance strong{font-size:30px;line-height:1.2;font-weight:850;font-variant-numeric:tabular-nums;color:var(--tx)}
 .qr-success-done{width:100%;margin-top:8px}
+.qr-move-pending{padding-top:30px}
+.qr-pending-spinner{width:46px;height:46px;margin:2px auto 18px;border:4px solid var(--bd);border-top-color:var(--acc);border-radius:50%;animation:qrPendingSpin .75s linear infinite}
+.qr-move-error{padding:28px 24px 24px;text-align:center}
+.qr-error-mark{width:58px;height:58px;display:grid;place-items:center;margin:0 auto 14px;border-radius:50%;background:color-mix(in srgb,var(--bad) 13%,var(--panel));color:var(--bad);font-size:34px;font-weight:850}
+.qr-move-error-message{margin:16px 0;padding:12px;border-radius:12px;background:color-mix(in srgb,var(--bad) 7%,var(--panel));color:var(--tx);font-size:13px;line-height:1.5}
+@keyframes qrPendingSpin{to{transform:rotate(360deg)}}
+
 @keyframes qrSuccessPop{0%{opacity:0;transform:scale(.55)}70%{transform:scale(1.1)}100%{opacity:1;transform:scale(1)}}
 @media(max-width:700px){.qr-move-success-overlay{place-items:center;padding:16px}.qr-move-success{border-radius:24px;max-height:90vh;overflow:auto}}

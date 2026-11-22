@@ -174,55 +174,102 @@ function openQRMoveModal(itemId, kind) {
       : '<p class="mut sm">Record the quantity received into inventory.</p>';
 
   modal(cfg.title, `${summary}${helper}<div class="fg">${fields}</div>`, `Confirm ${cfg.title}`, async data => {
-    const previousQty = Number(i.Quantity || 0);
-    // The write endpoint already returns the authoritative new balance.
-    // Use it directly instead of making a second, full-inventory API request.
-    const result = await api(cfg.action, { ...data, itemId: i.ItemID, rid: rid() });
-    if (kind === 'in' || kind === 'out') {
-      const newQty = Number(result && result.qty);
-      if (!Number.isFinite(newQty)) throw new Error('Movement saved, but the server did not return the updated balance. Refresh inventory to verify.');
-      const updated = { ...i, Quantity: newQty };
-      const min = Number(updated.MinStock) || 0;
-      updated.st = newQty <= 0 ? 'OUT' : newQty <= min ? 'LOW' : 'IN';
-      const index = S.items.findIndex(x => x.ItemID === i.ItemID);
-      if (index >= 0) S.items[index] = updated;
-      S.loaded = false; // refresh the full inventory only when another page needs it
-      showQRMoveSuccess(updated, kind, previousQty);
-    } else {
+    if (kind === 'adj') {
+      await api(cfg.action, { ...data, itemId: i.ItemID, rid: rid() });
       S.loaded = false;
       toast(`${cfg.title} recorded successfully. Open inventory to refresh the latest balance.`, 'ok');
+      return;
     }
+    const previousQty = Number(i.Quantity || 0);
+    const requestedQty = Number(kind === 'adj' ? data.newQty : data.qty);
+    const requestId = rid();
+    const payload = { ...data, itemId: i.ItemID, rid: requestId };
+
+    // Show an immediate pending state (target: <500ms UI response). The actual
+    // stock write remains on the server; success is shown only after confirmation.
+    const pending = showQRMovePending(i, kind, previousQty, requestedQty);
+    api(cfg.action, payload).then(result => {
+      if (kind === 'in' || kind === 'out') {
+        const newQty = Number(result && result.qty);
+        if (!Number.isFinite(newQty)) throw new Error('The server saved the movement but did not return a valid balance. Check inventory before retrying.');
+        const updated = { ...i, Quantity: newQty };
+        const min = Number(updated.MinStock) || 0;
+        updated.st = newQty <= 0 ? 'OUT' : newQty <= min ? 'LOW' : 'IN';
+        const index = S.items.findIndex(x => x.ItemID === i.ItemID);
+        if (index >= 0) S.items[index] = updated;
+        S.loaded = false;
+        renderQRMoveStatus(pending, updated, kind, 'success');
+      } else {
+        S.loaded = false;
+        pending.remove();
+        toast(`${cfg.title} recorded successfully. Open inventory to refresh the latest balance.`, 'ok');
+      }
+    }).catch(error => {
+      const uncertain = /timed out|cannot reach server|failed to fetch|networkerror/i.test(String(error && error.message));
+      if (uncertain) S.loaded = false;
+      renderQRMoveStatus(pending, i, kind, uncertain ? 'uncertain' : 'error', error && error.message);
+    });
   }, 'qr-move-overlay');
 }
 
-function showQRMoveSuccess(item, kind, previousQty, refreshFailed = false) {
+function showQRMovePending(item, kind, previousQty, requestedQty) {
+  const overlay = document.createElement('div');
+  overlay.className = 'ov qr-move-success-overlay';
+  const projected = kind === 'in' ? previousQty + requestedQty : previousQty - requestedQty;
+  overlay.innerHTML = `<section class="card qr-move-success qr-move-pending" role="status" aria-live="polite">
+    <div class="qr-pending-spinner" aria-hidden="true"></div>
+    <span class="qr-success-kicker">${kind === 'in' ? 'STOCK IN' : 'STOCK OUT'}</span>
+    <h3>Request received</h3>
+    <p class="mut sm">${esc(item.Name)} · ${esc(item.ItemID)}</p>
+    <div class="qr-success-balance"><small>Projected balance · pending confirmation</small><strong>${esc(projected)} ${esc(item.Unit || '')}</strong><span>${esc(item.Rack || 'No rack assigned')}</span></div>
+    <p class="mut sm">Saving stock movement securely in the background…</p>
+  </section>`;
+  document.body.append(overlay);
+  return overlay;
+}
+
+function renderQRMoveStatus(overlay, item, kind, state, message = '') {
+  if (!overlay || !overlay.isConnected) return;
   const isIn = kind === 'in';
   const balance = item.Quantity === '' || item.Quantity == null
     ? 'Unavailable'
     : `${esc(item.Quantity)} ${esc(item.Unit || '')}`;
-  const overlay = document.createElement('div');
-  overlay.className = 'ov qr-move-success-overlay';
-  overlay.innerHTML = `<section class="card qr-move-success" role="dialog" aria-modal="true" aria-label="${isIn ? 'Stock In successful' : 'Stock Out successful'}">
-    <button class="btn g sm qr-success-close" type="button" data-success-close aria-label="Close">✕</button>
-    <div class="qr-success-mark" aria-hidden="true"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="27"></circle><path d="m19 33 9 9 18-20"></path></svg></div>
-    <span class="qr-success-kicker">${isIn ? 'STOCK IN' : 'STOCK OUT'}</span>
-    <h3>${isIn ? 'Stock In Successfully!' : 'Stock Out Successfully!'}</h3>
-    <p class="mut sm">${esc(item.Name)} · ${esc(item.ItemID)}</p>
-    <div class="qr-success-balance"><small>Current stock balance</small><strong>${balance}</strong><span>${esc(item.Rack || 'No rack assigned')}</span></div>
-    ${refreshFailed ? '<p class="dash-note">The movement was saved, but the latest balance could not be loaded. Please reload HEIMS to verify the current stock.</p>' : '<p class="mut sm">Inventory balance has been refreshed successfully.</p>'}
-    <button class="btn qr-success-done" type="button" data-success-close>Done</button>
-  </section>`;
-  const close = () => {
-    overlay.remove();
-    if (!refreshFailed) {
+  if (state === 'success') {
+    overlay.innerHTML = `<section class="card qr-move-success" role="dialog" aria-modal="true" aria-label="${isIn ? 'Stock In successful' : 'Stock Out successful'}">
+      <button class="btn g sm qr-success-close" type="button" data-success-close aria-label="Close">✕</button>
+      <div class="qr-success-mark" aria-hidden="true"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="27"></circle><path d="m19 33 9 9 18-20"></path></svg></div>
+      <span class="qr-success-kicker">${isIn ? 'STOCK IN' : 'STOCK OUT'}</span>
+      <h3>${isIn ? 'Stock In Successfully!' : 'Stock Out Successfully!'}</h3>
+      <p class="mut sm">${esc(item.Name)} · ${esc(item.ItemID)}</p>
+      <div class="qr-success-balance"><small>Confirmed current stock balance</small><strong>${balance}</strong><span>${esc(item.Rack || 'No rack assigned')}</span></div>
+      <p class="mut sm">Google Sheets confirmed the stock movement.</p>
+      <button class="btn qr-success-done" type="button" data-success-close>Done</button>
+    </section>`;
+    const close = () => {
+      overlay.remove();
       const latest = S.items.find(x => x.ItemID === item.ItemID);
       if (latest) showQRItemResult(latest);
-    }
-  };
-  overlay.addEventListener('click', e => {
-    if (e.target === overlay || e.target.closest('[data-success-close]')) close();
-  });
-  document.body.append(overlay);
+    };
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay || e.target.closest('[data-success-close]')) close();
+    }, { once: false });
+  } else {
+    const title = state === 'uncertain' ? 'Status not confirmed' : `${isIn ? 'Stock In' : 'Stock Out'} not completed`;
+    const detail = state === 'uncertain'
+      ? 'The connection was interrupted. The server may still have processed this request. Check the item balance or transaction history before trying again.'
+      : (message || 'The server rejected this stock movement.');
+    overlay.innerHTML = `<section class="card qr-move-success qr-move-error" role="alert">
+      <div class="qr-error-mark" aria-hidden="true">!</div>
+      <span class="qr-success-kicker">${isIn ? 'STOCK IN' : 'STOCK OUT'}</span>
+      <h3>${esc(title)}</h3>
+      <p class="mut sm">${esc(item.Name)} · ${esc(item.ItemID)}</p>
+      <p class="qr-move-error-message">${esc(detail)}</p>
+      <button class="btn qr-success-done" type="button" data-success-close>Close</button>
+    </section>`;
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay || e.target.closest('[data-success-close]')) overlay.remove();
+    });
+  }
 }
 
 function openQRStockCheck(itemId) {

@@ -268,8 +268,26 @@ function upd_(it, o, u) {
   const next = it.h.map(k => Object.prototype.hasOwnProperty.call(o, k) ? o[k] : it.o[k]);
   it.sh.getRange(it.row, 1, 1, it.h.length).setValues([next]);
 }
+function nextTxnId_() {
+  // The script lock in locked_() serializes writers. Scan legacy IDs only once,
+  // then keep the counter in Script Properties instead of reading the full
+  // TRANSACTIONS ID column for every Stock In / Stock Out.
+  const props = PropertiesService.getScriptProperties(), key = 'HEIMS_TXN_COUNTER';
+  const saved = props.getProperty(key);
+  let n = saved === null ? NaN : Number(saved);
+  if (!Number.isFinite(n) || n < 0) {
+    const sh = sheet_('TRANSACTIONS'), last = sh.getLastRow();
+    n = 0;
+    if (last > 1) sh.getRange(2, 1, last - 1, 1).getValues().forEach(r => {
+      n = Math.max(n, parseInt(String(r[0]).replace(/\D/g, ''), 10) || 0);
+    });
+  }
+  n += 1;
+  props.setProperty(key, String(n));
+  return 'TXN-' + String(n).padStart(6, '0');
+}
 function txn_(i, type, prev, chg, nw, x, u) {
-  sheet_('TRANSACTIONS').appendRow([nextId_('TRANSACTIONS', 'TXN-', 6), new Date(), i.ItemID, i.Name, type, prev, chg, nw,
+  sheet_('TRANSACTIONS').appendRow([nextTxnId_(), new Date(), i.ItemID, i.Name, type, prev, chg, nw,
     x.staff || u.name, x.dept || '', x.ref || '', x.supplier || '', x.remarks || '', u.username]);
 }
 function audit_(u, action, id, before, after, ent) {
