@@ -175,24 +175,22 @@ function openQRMoveModal(itemId, kind) {
 
   modal(cfg.title, `${summary}${helper}<div class="fg">${fields}</div>`, `Confirm ${cfg.title}`, async data => {
     const previousQty = Number(i.Quantity || 0);
-    await api(cfg.action, { ...data, itemId: i.ItemID, rid: rid() });
-    // The movement is committed. Refresh first so the confirmation popup shows
-    // the authoritative balance returned by the inventory API.
-    try {
-      await load(true);
-      const updated = S.items.find(x => x.ItemID === i.ItemID);
-      if (updated && (kind === 'in' || kind === 'out')) {
-        showQRMoveSuccess(updated, kind, previousQty);
-      } else if (updated) {
-        showQRItemResult(updated);
-        toast(`${cfg.title} recorded successfully.`, 'ok');
-      }
-    } catch (refreshError) {
-      if (kind === 'in' || kind === 'out') {
-        showQRMoveSuccess({ ...i, Quantity: '' }, kind, previousQty, true);
-      } else {
-        toast('Movement saved, but inventory could not refresh. Reload HEIMS to see the latest balance.', 'bad');
-      }
+    // The write endpoint already returns the authoritative new balance.
+    // Use it directly instead of making a second, full-inventory API request.
+    const result = await api(cfg.action, { ...data, itemId: i.ItemID, rid: rid() });
+    if (kind === 'in' || kind === 'out') {
+      const newQty = Number(result && result.qty);
+      if (!Number.isFinite(newQty)) throw new Error('Movement saved, but the server did not return the updated balance. Refresh inventory to verify.');
+      const updated = { ...i, Quantity: newQty };
+      const min = Number(updated.MinStock) || 0;
+      updated.st = newQty <= 0 ? 'OUT' : newQty <= min ? 'LOW' : 'IN';
+      const index = S.items.findIndex(x => x.ItemID === i.ItemID);
+      if (index >= 0) S.items[index] = updated;
+      S.loaded = false; // refresh the full inventory only when another page needs it
+      showQRMoveSuccess(updated, kind, previousQty);
+    } else {
+      S.loaded = false;
+      toast(`${cfg.title} recorded successfully. Open inventory to refresh the latest balance.`, 'ok');
     }
   }, 'qr-move-overlay');
 }
