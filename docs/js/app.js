@@ -2,6 +2,8 @@ const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ST = { IN: ['In Stock', 'ok'], LOW: ['Low Stock', 'warn'], OUT: ['Out of Stock', 'bad'], UNVERIFIED: ['Needs Count', 'mut'] };
 const badge = s => `<span class="b ${ST[s][1]}">${ST[s][0]}</span>`;
+const isItemOrdered = i => i && (i.Ordered === true || String(i.Ordered).toUpperCase() === 'TRUE');
+const orderedBadge = i => isItemOrdered(i) ? '<span class="b ordered">ORDERED</span>' : '';
 const S = { items: [], cats: [], racks: [], loaded: false, f: { q: '', cat: '', rack: '', st: '', brand: '', sort: 'name' }, page: 1 };
 const PER = 25;
 const imgUrl = (u, w) => String(u || '').replace(/([?&]sz=)w\d+/, '$1w' + w);
@@ -11,7 +13,7 @@ document.addEventListener('error', e => { if (e.target.tagName === 'IMG') e.targ
 function showItem(id) {
   const i = (S.showArch ? S.archived : S.items).find(x => x.ItemID === id); if (!i) return;
   const q = i.Quantity === '' ? 'Not counted yet' : i.Quantity + ' ' + i.Unit;
-  const rows = [['Category', i.Category], ['Subcategory', i.Subcategory], ['Brand / model', [i.Brand, i.Model].filter(Boolean).join(' / ')], ['Rack', i.Rack], ['In stock', q], ['Minimum level', i.MinStock], ['Description', i.Description], ['Remarks', i.Remarks]].filter(r => r[1] !== '' && r[1] != null);
+  const rows = [['Category', i.Category], ['Subcategory', i.Subcategory], ['Brand / model', [i.Brand, i.Model].filter(Boolean).join(' / ')], ['Rack', i.Rack], ['In stock', q], ['Minimum level', i.MinStock], ['Order status', isItemOrdered(i) ? 'ORDERED' : 'Not ordered'], ['Description', i.Description], ['Remarks', i.Remarks]].filter(r => r[1] !== '' && r[1] != null);
   const m = document.createElement('div'); m.className = 'ov';
   m.innerHTML = `<div class="card md det"><div class="hero">${i.ImageURL ? `<img alt="${esc(i.Name)}" decoding="async" src="${esc(imgUrl(i.ImageURL, 800))}">` : `<div class="noimg">${NOPIC}<span>No photo yet</span></div>`}</div>
    <div class="dh"><div><h3>${esc(i.Name)}</h3><span class="id">${esc(i.ItemID)}</span></div>${badge(i.st)}</div>
@@ -50,16 +52,11 @@ async function load(force) {
 /* ---------- Minimal operational dashboard ---------- */
 async function vDash() {
   const d = await api('dashboard'), k = d.kpi || {};
-  const user = JSON.parse(sessionStorage.user || '{}');
-  const manager = ['ADMIN', 'SUPERVISOR'].includes(user.role);
   const lowOut = Number(k.lowOut ?? ((Number(k.low) || 0) + (Number(k.out) || 0))) || 0;
-  const pending = manager ? Number(k.pendingVerification || 0) : Number(k.unverified || 0);
-  const pendingLabel = manager ? 'Pending Verification' : 'Needs Initial Count';
   const cards = [
     ['Active Items', Number(k.items) || 0, ''],
     ['Low / Out Stock', lowOut, lowOut ? 'bad' : ''],
-    [pendingLabel, pending, pending ? 'warn' : ''],
-    ['Pending Orders', Number(k.pendingOrders) || 0, k.pendingOrders ? 'warn' : '']
+    ['Items Ordered', Number(k.ordered) || 0, Number(k.ordered) ? 'warn' : '']
   ];
   const em = t => `<div class="empty dash-empty">${t}</div>`;
   const lowItems = Array.isArray(d.lowList) ? d.lowList : [];
@@ -67,18 +64,15 @@ async function vDash() {
   const actions = [
     action('qrscanner', '<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM20 14v2M20 20h-3M17 20v-1"/>', 'QR Stock Movement'),
     action('inventory', '<path d="M21 8l-9-5-9 5v8l9 5 9-5zM3 8l9 5 9-5M12 13v8"/>', 'View Inventory'),
-    ...(manager ? [action('stockverification', '<path d="M4 4h16v16H4zM8 8h8M8 12h4M8 16h8M16 12l1.5 1.5L20 10"/>', 'Stock Verification')] : []),
-    action('orders', '<path d="M3 5h18v14H3zM7 9h10M7 13h6M16 16l2 2 3-4"/>', 'Stock Orders')
+    action('reports', '<path d="M4 3h16v18H4zM8 8h8M8 12h8M8 16h5"/>', 'Manager Report')
   ];
 
   $('#view').innerHTML = `
     <div class="kpis dash-kpis">${cards.map(c => `<div class="card kpi ${c[2]}"><span class="mut">${c[0]}</span><div class="v">${c[1].toLocaleString()}</div></div>`).join('')}</div>
     <div class="dash-layout">
       <section class="card dash-panel">
-        <div class="dash-panel-head"><div><h3>Needs Attention</h3><p class="mut">Items that may need action</p></div><a class="dash-text-link" href="#lowstock">View all</a></div>
-        ${lowItems.length ? `<div class="dash-alert-list">${lowItems.map(i => `<div class="dash-alert-item"><div class="dash-alert-copy"><b>${esc(i.name)}</b><small class="mut">${esc(i.id)} · ${esc(i.rack)} · ${i.qty === '' ? 'Not counted' : `${esc(i.qty)} ${esc(i.unit || '')}`} · Min ${esc(i.min)}</small></div>${badge(i.st)}</div>`).join('')}</div>` : em('No low or out-of-stock items.')}
-        ${!manager && Number(k.unverified || 0) > 0 ? `<p class="dash-note">${Number(k.unverified)} item(s) still need an initial quantity count by a supervisor.</p>` : ''}
-        ${manager && Number(k.pendingVerification || 0) > 0 ? `<p class="dash-note">${Number(k.pendingVerification)} active item(s) have not been physically verified yet. <a href="#stockverification">Open Stock Verification</a></p>` : ''}
+        <div class="dash-panel-head"><div><h3>Needs Attention</h3><p class="mut">Low stock and items already ordered</p></div><a class="dash-text-link" href="#reports">View report</a></div>
+        ${lowItems.length ? `<div class="dash-alert-list">${lowItems.map(i => `<div class="dash-alert-item"><div class="dash-alert-copy"><b>${esc(i.name)}</b><small class="mut">${esc(i.id)} · ${esc(i.rack)} · ${i.qty === '' ? 'Not counted' : `${esc(i.qty)} ${esc(i.unit || '')}`} · Min ${esc(i.min)}</small></div><span>${badge(i.st)} ${i.ordered ? '<span class="b ordered">ORDERED</span>' : ''}</span></div>`).join('')}</div>` : em('No low stock or ordered items.')}
       </section>
       <section class="card dash-panel">
         <div class="dash-panel-head"><div><h3>Quick Actions</h3><p class="mut">Common inventory tasks</p></div></div>
@@ -113,12 +107,32 @@ function drawTable() {
     `<div class="card" style="padding:4px"><table><thead><tr><th>ID</th><th>Item</th><th>Category</th><th>Brand / Model</th><th>Rack</th><th class="n">Qty</th><th class="n">Min</th><th>Status</th><th>Actions</th></tr></thead><tbody>${cur.map(i => `<tr data-open="${esc(i.ItemID)}">
     <td data-l="ID" class="id">${esc(i.ItemID)}</td><td data-l="Item" class="nm">${thumb(i)}<b>${esc(i.Name)}</b></td><td data-l="Category">${esc(i.Category)}</td>
     <td data-l="Brand / Model">${esc([i.Brand, i.Model].filter(Boolean).join(' / ') || '-')}</td><td data-l="Rack">${esc(i.Rack)}</td>
-    <td data-l="Qty" class="n">${i.Quantity === '' ? '?' : esc(i.Quantity) + ' ' + esc(i.Unit)}</td><td data-l="Min" class="n">${esc(i.MinStock)}</td><td data-l="Status">${badge(i.st)}</td><td data-l="Actions"><button class="btn g sm" data-qr-label="${esc(i.ItemID)}">QR Label</button> ${A ? (S.showArch ? `<button class="btn g sm" data-restore="${esc(i.ItemID)}">Restore</button>` : `<button class="btn g sm" data-edit="${esc(i.ItemID)}">Edit</button> <button class="btn g sm" data-arch="${esc(i.ItemID)}">Archive</button>`) : ''}</td></tr>`).join('')}</tbody></table></div>
+    <td data-l="Qty" class="n">${i.Quantity === '' ? '?' : esc(i.Quantity) + ' ' + esc(i.Unit)}</td><td data-l="Min" class="n">${esc(i.MinStock)}</td><td data-l="Status"><span class="status-stack">${badge(i.st)}${orderedBadge(i)}</span></td><td data-l="Actions"><button class="btn g sm" data-qr-label="${esc(i.ItemID)}">QR Label</button> ${A ? (S.showArch ? `<button class="btn g sm" data-restore="${esc(i.ItemID)}">Restore</button>` : `<button class="btn g sm" data-edit="${esc(i.ItemID)}">Edit</button> <button class="btn g sm" data-toggle-ordered="${esc(i.ItemID)}" data-ordered="${isItemOrdered(i)}">${isItemOrdered(i) ? 'Clear Ordered' : 'Mark Ordered'}</button> <button class="btn g sm" data-arch="${esc(i.ItemID)}">Archive</button>`) : ''}</td></tr>`).join('')}</tbody></table></div>
     <div class="pg"><span class="mut">${rows.length} item(s) · page ${S.page}/${pages}</span><div><button class="btn g" data-p="-1" ${S.page < 2 ? 'disabled' : ''}>Prev</button><button class="btn g" data-p="1" ${S.page >= pages ? 'disabled' : ''}>Next</button></div></div>`;
 }
 
+async function toggleItemOrdered(itemId, wasOrdered) {
+  if (!can('ADMIN', 'SUPERVISOR')) return toast('Only Admin or Supervisor can update the order label.', 'bad');
+  const item = S.items.find(i => i.ItemID === itemId);
+  if (!item) return toast('Item not found. Refresh inventory and try again.', 'bad');
+  const next = !wasOrdered, pending = toast(next ? 'Marking item as ordered…' : 'Removing ordered label…', 'pending', 0);
+  try {
+    const result = await api('setItemOrdered', { itemId, ordered: next, rid: rid() });
+    item.Ordered = !!result.ordered;
+    pending.className = 'toast';
+    pending.textContent = next ? 'Item marked as ORDERED' : 'ORDERED label removed';
+    if (location.hash === '#inventory') drawTable();
+    if (location.hash === '#reports') drawReport();
+    setTimeout(() => pending.remove(), 3500);
+  } catch (error) {
+    pending.className = 'toast bad';
+    pending.textContent = 'Could not update order label: ' + (error.message || 'Please try again.');
+    setTimeout(() => pending.remove(), 6000);
+  }
+}
+
 /* ---------- Router & events ---------- */
-const V = { dashboard: ['Dashboard', vDash], inventory: ['Inventory', vInv], qrscanner: ['QR Stock Movement', vQR], lowstock: ['Low Stock Alerts', vLow], history: ['Transaction History', vHist], audit: ['Audit Log', vAudit], racks: ['Rack Locations', vRacks], categories: ['Categories', vCats], settings: ['Settings', vSettings], orders: ['Stock Orders', vOrders], stockverification: ['Stock Verification', vStockVerification] };
+const V = { dashboard: ['Dashboard', vDash], inventory: ['Inventory', vInv], qrscanner: ['QR Stock Movement', vQR], lowstock: ['Low Stock Alerts', vLow], reports: ['Manager Report', vReport], history: ['Transaction History', vHist], audit: ['Audit Log', vAudit], racks: ['Rack Locations', vRacks], categories: ['Categories', vCats], settings: ['Settings', vSettings] };
 async function route() {
   if (typeof stopQRScanner === 'function') await stopQRScanner();
   let k = (location.hash || '#dashboard').slice(1); if (!V[k]) k = 'dashboard';
@@ -171,7 +185,7 @@ document.addEventListener('click', e => {
   const t = e.target.closest('button'); if (!t) return;
   if (t.id === 'eye') { const p = $('#lp'), s = p.type === 'password'; p.type = s ? 'text' : 'password'; t.classList.toggle('on', s); t.setAttribute('aria-pressed', s); t.setAttribute('aria-label', s ? 'Hide password' : 'Show password'); }
   if (t.id === 'retry') route();
-  if (t.id === 'verify-refresh') vStockVerification(true).catch(e => toast(e.message, 'bad'));
+  if (t.dataset.toggleOrdered) toggleItemOrdered(t.dataset.toggleOrdered, t.dataset.ordered === 'true');
   if (t.id === 'clr') { S.f = { q: '', cat: '', rack: '', st: '', brand: '', sort: 'name' }; S.page = 1; Object.keys(S.f).forEach(k => $('#f-' + k).value = ''); drawTable(); }
   if (t.dataset.p) { S.page += +t.dataset.p; drawTable(); }
 });

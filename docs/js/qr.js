@@ -119,12 +119,12 @@ function showQRItemResult(i) {
   overlay.innerHTML = `<section class="card qr-found-modal" role="dialog" aria-modal="true" aria-label="Found inventory item">
     <div class="qr-pop-head"><span class="b ok">ITEM FOUND</span><button class="btn g sm" type="button" data-qr-close aria-label="Close item details">✕</button></div>
     ${image}
-    <div class="qr-pop-body"><div class="qr-found-main"><div><h3>${esc(i.Name)}</h3><span class="id">${esc(i.ItemID)}</span></div>${badge(i.st)}</div>
+    <div class="qr-pop-body"><div class="qr-found-main"><div><h3>${esc(i.Name)}</h3><span class="id">${esc(i.ItemID)}</span></div>${badge(i.st)}${orderedBadge(i)}</div>
       <div class="qr-details"><span><small class="mut">Current quantity</small><b>${quantity}</b></span><span><small class="mut">Rack / location</small><b>${esc(i.Rack || '-')}</b></span><span><small class="mut">Category</small><b>${esc(i.Category || '-')}</b></span><span><small class="mut">Minimum stock</small><b>${esc(i.MinStock ?? 0)} ${esc(i.Unit || '')}</b></span></div>
       ${i.Quantity === '' ? `<p class="dash-note">This item has no opening quantity yet. An Admin or Supervisor must record its initial quantity using Stock Adjustment before Stock In or Stock Out.</p>` : ''}
       <div class="qr-actions">
         ${can('ADMIN','SUPERVISOR','TECHNICIAN') ? `<button class="btn" data-qr-move="in" data-item="${esc(i.ItemID)}">Stock In</button><button class="btn" data-qr-move="out" data-item="${esc(i.ItemID)}">Stock Out</button>` : ''}
-        ${can('ADMIN','SUPERVISOR') ? `<button class="btn g" data-qr-move="adj" data-item="${esc(i.ItemID)}">Stock Adjustment</button><button class="btn g qr-check-btn" data-qr-stock-check="${esc(i.ItemID)}">Stock Verification</button>` : ''}
+        ${can('ADMIN','SUPERVISOR') ? `<button class="btn g" data-qr-move="adj" data-item="${esc(i.ItemID)}">Stock Adjustment</button>` : ''}
         <button class="btn g" data-qr-label="${esc(i.ItemID)}">Print QR Label</button>
       </div>
     </div></section>`;
@@ -273,21 +273,6 @@ function renderQRMoveStatus(overlay, item, kind, state, message = '') {
       if (e.target === overlay || e.target.closest('[data-success-close]')) overlay.remove();
     });
   }
-}
-
-function openQRStockCheck(itemId) {
-  if (!can('ADMIN', 'SUPERVISOR')) { toast('Only Admin or Supervisor can record a stock check.', 'bad'); return; }
-  const i = S.items.find(x => x.ItemID === itemId);
-  if (!i) { toast('Item not found. Refresh inventory and scan again.', 'bad'); return; }
-  const systemQty = i.Quantity === '' ? 'Not counted in system' : `${esc(i.Quantity)} ${esc(i.Unit || '')}`;
-  modal('Physical Stock Check', `<div class="qr-check-item">${i.ImageURL ? `<img src="${esc(imgUrl(i.ImageURL, 240))}" alt="${esc(i.Name)}">` : `<div class="qr-check-no-photo">${NOPIC}</div>`}<div><b>${esc(i.Name)}</b><small class="mut">${esc(i.ItemID)} · ${esc(i.Rack || '-')}</small><small class="mut">System quantity: <strong>${systemQty}</strong></small></div></div>
-    <p class="mut sm">Physically inspect the spare part and count the actual quantity. This check records a report only; it will not change stock balance.</p>
-    <div class="fg">${fld('countedQty', `Physical quantity counted (${esc(i.Unit || 'units')}) *`, '', 'type=number min=0 step=any required')}${sel('identityMatch', 'Does the real item match the system name / photo / model? *', ['YES','NO'], 'YES')}${fld('notes', 'Remarks (optional)', '', 'maxlength=300')}</div>`, 'Save Stock Check', async d => {
-      const r = await api('recordStockCheck', { itemId: i.ItemID, countedQty: d.countedQty, identityMatch: d.identityMatch, notes: d.notes, rid: rid() });
-      const varianceText = r.variance === '' ? 'System quantity has not been verified yet.' : (Number(r.variance) === 0 ? 'Physical quantity matches system.' : `Quantity difference: ${r.variance} ${i.Unit || ''}.`);
-      const label = r.result === 'MATCHED' ? 'MATCHED' : r.result === 'ITEM_MISMATCH' ? 'ITEM MISMATCH' : r.result === 'QTY_VARIANCE' ? 'QUANTITY VARIANCE' : 'SYSTEM QTY UNVERIFIED';
-      toast(`Stock check saved: ${label}. ${varianceText}`, r.result === 'MATCHED' ? 'ok' : 'bad');
-    });
 }
 
 function drawQRSearch() {
@@ -476,7 +461,6 @@ document.addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.id === 'bulk-qr-open') { openBulkQRPrint(); return; }
   if (b.dataset.qrOpen) { const i = S.items.find(x => x.ItemID === b.dataset.qrOpen); if (i) { qrSuccessFeedback(); showQRItemResult(i); } }
-  if (b.dataset.qrStockCheck) { document.querySelectorAll('.qr-item-overlay').forEach(el => el.remove()); openQRStockCheck(b.dataset.qrStockCheck); return; }
   if (b.dataset.qrMove) {
     const id = b.dataset.item, kind = b.dataset.qrMove;
     openQRMoveModal(id, kind);

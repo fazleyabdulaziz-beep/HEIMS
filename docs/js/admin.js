@@ -50,23 +50,3 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') document.que
 let _last = Date.now();
 ['click', 'keydown', 'touchstart'].forEach(ev => addEventListener(ev, () => _last = Date.now(), { passive: true }));
 setInterval(() => { if (sessionStorage.getItem('token') && !localStorage.rt && Date.now() - _last > 30 * 60 * 1000) logout(true); }, 60000);
-
-/* ---------- Stock Verification Dashboard ---------- */
-async function vStockVerification(force = false) {
-  const d = await api('stockVerificationDashboard', force ? { refresh: true } : {}), c = d.counts;
-  const status = r => ({ MATCHED: ['MATCHED','ok'], QTY_VARIANCE: ['Quantity variance','warn'], ITEM_MISMATCH: ['Item mismatch','bad'], SYSTEM_QTY_UNVERIFIED: ['System unverified','mut'] }[r] || [r || 'Unknown','mut']);
-  $('#view').innerHTML = `<div class="top"><span class="mut sm">Latest physical check per active item is used for the summary.</span><button class="btn g" id="verify-refresh">Refresh</button></div>
-    <div class="kpis verify-kpis">
-      <div class="card kpi"><span class="mut">Active items</span><div class="v">${c.total}</div></div>
-      <div class="card kpi"><span class="mut">Checked items</span><div class="v">${c.checked}</div></div>
-      <div class="card kpi"><span class="mut">Matched</span><div class="v">${c.matched}</div></div>
-      <div class="card kpi warn"><span class="mut">Quantity variance</span><div class="v">${c.quantityVariance}</div></div>
-      <div class="card kpi" style="border-color:var(--bad)"><span class="mut">Item mismatch</span><div class="v">${c.itemMismatch}</div></div>
-      <div class="card kpi"><span class="mut">Pending verification</span><div class="v">${c.pending}</div></div>
-    </div>
-    <div class="card verify-summary"><div class="verify-progress-head"><b>Verification progress</b><strong>${c.total ? Math.round(c.checked / c.total * 100) : 0}%</strong></div><div class="trk"><i style="width:${c.total ? c.checked / c.total * 100 : 0}%"></i></div><p class="mut sm">${c.systemUnverified} checked item(s) still have no system quantity baseline.</p></div>
-    <div class="card verify-table"><h3>Latest stock checks</h3><div class="table-scroll"><table><thead><tr><th>Checked</th><th>Item</th><th class="n">System</th><th class="n">Physical</th><th class="n">Variance</th><th>Result</th><th>Checked by</th><th>Remarks</th></tr></thead><tbody>
-      ${d.latestChecks.map(r => { const st = status(r.result); return `<tr><td data-l="Checked">${esc(fdt(r.timestamp))}</td><td data-l="Item"><b>${esc(r.itemName)}</b><br><small class="mut">${esc(r.itemId)}</small></td><td data-l="System" class="n">${r.systemQty === '' ? '-' : esc(r.systemQty)}</td><td data-l="Physical" class="n">${esc(r.countedQty)}</td><td data-l="Variance" class="n">${r.variance === '' ? '-' : (Number(r.variance) > 0 ? '+' : '') + esc(r.variance)}</td><td data-l="Result"><span class="b ${st[1]}">${st[0]}</span></td><td data-l="Checked by">${esc(r.checkedBy)}</td><td data-l="Remarks">${esc(r.notes || '-')}</td></tr>`; }).join('') || '<tr><td colspan="8" class="empty">No physical stock checks recorded yet.</td></tr>'}
-    </tbody></table></div></div>`;
-}
-

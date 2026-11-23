@@ -53,6 +53,58 @@ async function vLow() {
     `<p class="mut">${nomin} item(s) have no minimum stock level, so they never raise an alert. Set it in Inventory → Edit.</p>`;
 }
 
+/* ---------- Combined low-stock and ordered-items report ---------- */
+let REPORT_ROWS = [];
+async function vReport() {
+  // Use a unique payload key to bypass the short browser read cache for a fresh manager report.
+  const d = await api('inventory', { reportRefresh: Date.now() });
+  Object.assign(S, { items: d.items, cats: d.categories, racks: d.racks, loaded: true });
+  drawReport();
+}
+function drawReport() {
+  const low = S.items.filter(i => i.st === 'LOW' || i.st === 'OUT');
+  const ordered = S.items.filter(i => isItemOrdered(i));
+  REPORT_ROWS = S.items.filter(i => i.st === 'LOW' || i.st === 'OUT' || isItemOrdered(i))
+    .sort((a, b) => {
+      const rank = i => i.st === 'OUT' ? 0 : i.st === 'LOW' ? 1 : 2;
+      return rank(a) - rank(b) || String(a.Name).localeCompare(String(b.Name));
+    });
+  const generated = new Date().toLocaleString();
+  const user = JSON.parse(sessionStorage.user || '{}');
+  $('#view').innerHTML = `
+    <div class="top report-actions">
+      <button class="btn g" id="report-csv" ${REPORT_ROWS.length ? '' : 'disabled'}>Export CSV</button>
+      <button class="btn" id="report-print">Generate Manager Report · Print / PDF</button>
+    </div>
+    <section class="card manager-report">
+      <div class="manager-report-head">
+        <div>
+          <div class="report-eyebrow">${esc(sessionStorage.hotel || 'Hotel Engineering')}</div>
+          <h2>Low Stock &amp; Ordered Items Report</h2>
+          <p class="mut sm">Prepared by ${esc(user.name || user.username || '')} · ${esc(generated)}</p>
+        </div>
+        <div class="report-count">${REPORT_ROWS.length}<small>items requiring attention</small></div>
+      </div>
+      <div class="report-summary">
+        <div><small>Low / Out of Stock</small><strong>${low.length}</strong></div>
+        <div><small>Marked ORDERED</small><strong>${ordered.length}</strong></div>
+        <div><small>Combined unique items</small><strong>${REPORT_ROWS.length}</strong></div>
+      </div>
+      ${REPORT_ROWS.length ? `<div class="table-scroll"><table class="report-table"><thead><tr><th>Item ID</th><th>Item Description</th><th>Rack</th><th class="n">Current Qty</th><th class="n">Min Qty</th><th>Stock Status</th><th>Order Status</th></tr></thead><tbody>
+        ${REPORT_ROWS.map(i => `<tr>
+          <td data-l="Item ID">${esc(i.ItemID)}</td>
+          <td data-l="Item"><b>${esc(i.Name)}</b><br><small class="mut">${esc([i.Brand, i.Model].filter(Boolean).join(' · '))}</small></td>
+          <td data-l="Rack">${esc(i.Rack || '-')}</td>
+          <td data-l="Current Qty" class="n">${i.Quantity === '' ? 'Not counted' : `${esc(i.Quantity)} ${esc(i.Unit || '')}`}</td>
+          <td data-l="Min Qty" class="n">${esc(i.MinStock ?? 0)} ${esc(i.Unit || '')}</td>
+          <td data-l="Stock Status">${badge(i.st)}</td>
+          <td data-l="Order Status">${isItemOrdered(i) ? '<span class="b ordered">ORDERED</span>' : '-'}</td>
+        </tr>`).join('')}
+      </tbody></table></div>` : '<div class="empty">No low-stock or ordered items at the moment.</div>'}
+      <p class="report-footnote">Note: ORDERED means the manager has been informed / is arranging the purchase. Quantity and delivery details are not tracked in HEIMS.</p>
+    </section>`;
+}
+
 /* ---------- Rack locations ---------- */
 async function vRacks() { await load(false); drawRacks(); }
 function drawRacks() {
@@ -76,6 +128,8 @@ document.addEventListener('click', e => {
   if (b.id === 'a-back') location.hash = '#history';
   if (b.dataset.hp) { H.page += +b.dataset.hp; drawHist(); }
   if (b.id === 'l-csv') csv('low-stock', ['ItemID', 'Item', 'Rack', 'Qty', 'Unit', 'Min', 'Shortfall', 'Status'], LOW.map(i => [i.ItemID, i.Name, i.Rack, i.Quantity, i.Unit, i.MinStock, Math.max(0, i.MinStock - i.Quantity), ST[i.st][0]]));
+  if (b.id === 'report-print') window.print();
+  if (b.id === 'report-csv') csv('manager-low-stock-ordered-report', ['ItemID','Item','Rack','CurrentQty','Unit','MinQty','StockStatus','OrderStatus'], REPORT_ROWS.map(i => [i.ItemID,i.Name,i.Rack,i.Quantity,i.Unit,i.MinStock,ST[i.st][0],isItemOrdered(i)?'ORDERED':'']));
   if (b.dataset.rack) { S.rack = b.dataset.rack; drawRacks(); }
   if (b.id === 'addloc') modal('Add location', fld('name', 'Location name *', '', 'required placeholder="Rack 4,1"') + fld('description', 'Description'), 'Add location',
     async d => { await api('addLocation', { ...d, rid: rid() }); toast('Location added'); await vRacks(); });
@@ -84,61 +138,5 @@ document.addEventListener('click', e => {
     if (!ids.length) return toast('Select items first', 'bad');
     b.disabled = true;
     api('transferItems', { itemIds: ids, toRack: $('#rk-to').value, rid: rid() }).then(async r => { toast(r.moved + ' item(s) moved'); await load(true); drawRacks(); }).catch(x => { toast(x.message, 'bad'); b.disabled = false; });
-  }
-});
-
-/* ---------- Stock Orders ---------- */
-let ORDERS = [];
-async function vOrders() {
-  ORDERS = await api('listOrders');
-  const W = can('ADMIN', 'SUPERVISOR');
-  const active = ORDERS.filter(o => !['RECEIVED','CANCELLED'].includes(o.Status)).length;
-  $('#view').innerHTML = `<div class="kpis">
-    <div class="card kpi"><span class="mut">Total orders</span><div class="v">${ORDERS.length}</div></div>
-    <div class="card kpi warn"><span class="mut">Awaiting / partial</span><div class="v">${active}</div></div>
-    <div class="card kpi"><span class="mut">Fully received</span><div class="v">${ORDERS.filter(o => o.Status === 'RECEIVED').length}</div></div>
-   </div>
-   ${W ? `<div class="top"><button class="btn" id="ord-add">+ Create Stock Order</button></div>` : ''}
-   <div class="card" style="padding:4px"><table><thead><tr><th>Order ID</th><th>Item</th><th>Supplier</th><th class="n">Ordered</th><th class="n">Received</th><th>Expected</th><th>Status</th><th>Action</th></tr></thead><tbody>
-   ${ORDERS.map(o => {
-     const rem = Math.max(0, Number(o.QtyOrdered) - Number(o.QtyReceived));
-     const cls = o.Status === 'RECEIVED' ? 'ok' : o.Status === 'CANCELLED' ? 'mut' : o.Status === 'PARTIAL' ? 'warn' : 'warn';
-     return `<tr><td data-l="Order"><b>${esc(o.OrderID)}</b><br><small class="mut">${o.CreatedAt ? esc(fdt(o.CreatedAt)) : ''}</small></td>
-       <td data-l="Item"><b>${esc(o.ItemName)}</b><br><small class="mut">${esc(o.ItemID)}</small></td>
-       <td data-l="Supplier">${esc(o.Supplier || '-')}<br><small class="mut">${esc(o.Reference || '')}</small></td>
-       <td data-l="Ordered" class="n">${esc(o.QtyOrdered)} ${esc(o.Unit)}</td><td data-l="Received" class="n">${esc(o.QtyReceived)} / ${esc(o.QtyOrdered)}</td>
-       <td data-l="Expected">${esc(o.ExpectedDate || '-')}</td><td data-l="Status"><span class="b ${cls}">${esc(o.Status)}</span></td>
-       <td data-l="Action">${W && rem > 0 && !['CANCELLED'].includes(o.Status) ? `<button class="btn sm" data-receive="${esc(o.OrderID)}" data-rem="${rem}">Receive</button> <button class="btn g sm" data-cancel-order="${esc(o.OrderID)}">Cancel</button>` : '-'}</td></tr>`;
-   }).join('') || '<tr><td colspan="8" class="empty">No stock orders yet.</td></tr>'}
-   </tbody></table></div>
-   <p class="mut">Orders do not increase inventory quantity until you record them as received. Partial receipts are supported.</p>`;
-}
-async function createStockOrder() {
-  try { await load(false); } catch (e) { toast(e.message, 'bad'); return; }
-  const opts = S.items.map(i => `<option value="${esc(i.ItemID)}">${esc(i.ItemID)} — ${esc(i.Name)} (${esc(i.Rack)})</option>`).join('');
-  modal('Create Stock Order', `<div class="fg"><div><label>Inventory item *</label><select name="itemId" required>${opts}</select></div>
-    ${fld('qty','Quantity ordered *','','type="number" min="0.01" step="any" required')}
-    ${fld('supplier','Supplier *','','required')}
-    ${fld('reference','PO / reference number')}
-    ${fld('expectedDate','Expected delivery date','','type="date"')}
-    ${fld('notes','Notes')}</div>`, 'Save Order', async d => {
-      await api('createOrder', { ...d, rid: rid() }); toast('Stock order created'); await vOrders();
-    });
-}
-document.addEventListener('click', e => {
-  const b = e.target.closest('button'); if (!b) return;
-  if (b.id === 'ord-add') createStockOrder();
-  if (b.dataset.receive) {
-    const id = b.dataset.receive, rem = Number(b.dataset.rem);
-    modal('Receive Stock', `<p>Remaining quantity: <b>${rem}</b></p>${fld('qty','Quantity received *',rem,'type="number" min="0.01" max="'+rem+'" step="any" required')}`, 'Confirm Receipt', async d => {
-      await api('receiveOrder', { orderId: id, qty: d.qty, rid: rid() });
-      toast('Received quantity added to inventory'); await vOrders();
-    });
-  }
-  if (b.dataset.cancelOrder) {
-    const id = b.dataset.cancelOrder;
-    modal('Cancel Stock Order', `<p>Cancel order <b>${esc(id)}</b>? This cannot be undone.</p>`, 'Cancel Order', async () => {
-      await api('cancelOrder', { orderId: id, rid: rid() }); toast('Order cancelled'); await vOrders();
-    });
   }
 });

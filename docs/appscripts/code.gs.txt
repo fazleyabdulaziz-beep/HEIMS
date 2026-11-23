@@ -4,15 +4,13 @@ var HEIMS_DIAG = {};
  * API: POST text/plain JSON {action, payload, token} -> {ok, data | error, code}
  */
 const HEAD = {
-  ITEMS: ['ItemID','Name','Category','Subcategory','Brand','Model','Description','Quantity','Unit','Rack','MinStock','ImageURL','Remarks','Status','NeedsCount','CreatedAt','CreatedBy','UpdatedAt','UpdatedBy'],
+  ITEMS: ['ItemID','Name','Category','Subcategory','Brand','Model','Description','Quantity','Unit','Rack','MinStock','ImageURL','Remarks','Status','NeedsCount','CreatedAt','CreatedBy','UpdatedAt','UpdatedBy','Ordered'],
   TRANSACTIONS: ['TxnID','Timestamp','ItemID','ItemName','Type','PrevQty','Change','NewQty','Staff','Department','Reference','Supplier','Remarks','User'],
   CATEGORIES: ['Name','SortOrder','Active'],
   LOCATIONS: ['Rack','Description','Active'],
   USERS: ['Username','Name','Role','PasswordHash','Salt','Active','CreatedAt'],
   AUDIT_LOG: ['AuditID','Timestamp','User','Action','Entity','EntityID','Before','After'],
-  SETTINGS: ['Key','Value'],
-  ORDERS: ['OrderID','CreatedAt','ItemID','ItemName','QtyOrdered','QtyReceived','Unit','Supplier','Reference','ExpectedDate','Notes','Status','CreatedBy','UpdatedAt','UpdatedBy'],
-  STOCK_CHECKS: ['CheckID','Timestamp','ItemID','ItemName','SystemQty','CountedQty','Variance','IdentityMatch','Notes','CheckedBy','Result']
+  SETTINGS: ['Key','Value']
 };
 const CATS = ['Plumbing Spare Parts','Electrical Spare Parts','ACMV / HVAC Components','Lighting Components','Tools & Measuring Instruments','Consumables','General Maintenance','Door Hardware & Accessories'];
 const RACKS = ['1,1','1,2','1,3','1,4','1,5','1,6','2,1','2,2','2,3','2,4','3,1','3,2','3,3','3,4'];
@@ -24,16 +22,15 @@ const API = { login: login_, logout: logout_, resume: resume_, uploadImage: uplo
   addLocation: addLocation_, transferItems: transferItems_, history: history_, auditLog: auditLog_,
   changePassword: changePassword_, listUsers: listUsers_, saveUser: saveUser_, resetPassword: resetPassword_,
   addCategory: addCategory_, renameCategory: renameCategory_, getSettings: getSettings_, saveSettings: saveSettings_,
-  listOrders: listOrders_, createOrder: createOrder_, receiveOrder: receiveOrder_, cancelOrder: cancelOrder_, recordStockCheck: recordStockCheck_,
-  stockVerificationDashboard: stockVerificationDashboard_,
+  setItemOrdered: setItemOrdered_,
   stockIn: (p, u) => move_(p, u, 'STOCK_IN'), stockOut: (p, u) => move_(p, u, 'STOCK_OUT'), adjustStock: (p, u) => move_(p, u, 'ADJUSTMENT') };
 
 function doGet() { return ContentService.createTextOutput('HEIMS API OK'); }
 
-const READ_ACTIONS_ = ['inventory','dashboard','history','auditLog','listOrders','listUsers','getSettings','stockVerificationDashboard'];
+const READ_ACTIONS_ = ['inventory','dashboard','history','auditLog','listUsers','getSettings'];
 function clearSheetCache_() {
   const c = CacheService.getScriptCache();
-  ['ITEMS','TRANSACTIONS','CATEGORIES','LOCATIONS','AUDIT_LOG','SETTINGS','ORDERS','STOCK_CHECKS']
+  ['ITEMS','TRANSACTIONS','CATEGORIES','LOCATIONS','AUDIT_LOG','SETTINGS']
     .forEach(n => c.remove('rows_' + n));
   c.remove('dashboard_stockout_usage');
 }
@@ -170,12 +167,29 @@ function uploadImage_(p, u) {
 }
 
 /* ---------- READ ENDPOINTS ---------- */
+function ensureOrderedColumn_() {
+  const props = PropertiesService.getScriptProperties(), key = 'HEIMS_ORDERED_COLUMN_READY';
+  if (props.getProperty(key) === '1') return false;
+  const sh = sheet_('ITEMS'), lastCol = Math.max(1, sh.getLastColumn());
+  const headers = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  if (headers.indexOf('Ordered') < 0) {
+    sh.getRange(1, lastCol + 1).setValue('Ordered').setFontWeight('bold');
+  }
+  props.setProperty(key, '1');
+  CacheService.getScriptCache().remove('rows_ITEMS');
+  return true;
+}
 function activeItems_() {
-  return rows_('ITEMS').filter(i => i.Status === 'ACTIVE').map(i => Object.assign(i, { st: status_(i) }));
+  ensureOrderedColumn_();
+  return rows_('ITEMS').filter(i => i.Status === 'ACTIVE').map(i => Object.assign(i, {
+    Ordered: i.Ordered === true || String(i.Ordered).toUpperCase() === 'TRUE',
+    st: status_(i)
+  }));
 }
 function inventory_(p) {
+  ensureOrderedColumn_();
   return {
-    items: p && p.archived === true ? rows_('ITEMS').filter(i => i.Status === 'ARCHIVED').map(i => Object.assign(i, { st: status_(i) })) : activeItems_(),
+    items: p && p.archived === true ? rows_('ITEMS').filter(i => i.Status === 'ARCHIVED').map(i => Object.assign(i, { Ordered: i.Ordered === true || String(i.Ordered).toUpperCase() === 'TRUE', st: status_(i) })) : activeItems_(),
     categories: rows_('CATEGORIES').filter(c => c.Active === true).sort((a, b) => a.SortOrder - b.SortOrder).map(c => c.Name),
     racks: rows_('LOCATIONS').filter(l => l.Active === true).map(l => l.Rack)
   };
@@ -196,37 +210,21 @@ function stockOutUsage_() {
 }
 
 function dashboard_(p, u) {
-  // Minimal operational summary: do not scan transaction history or build chart datasets.
   const it = activeItems_();
   const av = { IN: 0, LOW: 0, OUT: 0, UNVERIFIED: 0 };
   it.forEach(i => av[i.st]++);
-
-  // Match the Stock Verification page's definition: an item is checked if it has
-  // at least one recorded physical verification. Reads use the normal short cache.
-  const checkSheet = sheet_('STOCK_CHECKS');
-  const checks = checkSheet ? rows_('STOCK_CHECKS') : [];
-  const checkedIds = new Set(checks.map(c => String(c.ItemID)));
-  const pendingVerification = it.filter(i => !checkedIds.has(String(i.ItemID))).length;
-
-  const orderSheet = sheet_('ORDERS');
-  const orders = orderSheet ? rows_('ORDERS') : [];
-  const pendingOrders = orders.filter(o => !['RECEIVED', 'CANCELLED'].includes(String(o.Status).toUpperCase())).length;
-
   const lowList = it
-    .filter(i => i.st === 'LOW' || i.st === 'OUT')
+    .filter(i => i.st === 'LOW' || i.st === 'OUT' || i.Ordered)
     .sort((a, b) => (a.st === b.st ? Number(a.Quantity || 0) - Number(b.Quantity || 0) : (a.st === 'OUT' ? -1 : 1)))
-    .slice(0, 5)
-    .map(i => ({ id: i.ItemID, name: i.Name, qty: i.Quantity, unit: i.Unit, min: i.MinStock, rack: i.Rack, st: i.st }));
-
+    .slice(0, 6)
+    .map(i => ({ id: i.ItemID, name: i.Name, qty: i.Quantity, unit: i.Unit, min: i.MinStock, rack: i.Rack, st: i.st, ordered: !!i.Ordered }));
   return {
     kpi: {
       items: it.length,
       low: av.LOW,
       out: av.OUT,
       lowOut: av.LOW + av.OUT,
-      unverified: av.UNVERIFIED,
-      pendingVerification: pendingVerification,
-      pendingOrders: pendingOrders
+      ordered: it.filter(i => i.Ordered).length
     },
     lowList: lowList
   };
@@ -426,62 +424,6 @@ function archiveItem_(p, u) {                    // soft delete: row and history
     return true;
   });
 }
-function recordStockCheck_(p, u) {
-  // Physical verification is restricted to the inventory owner roles. It records findings only;
-  // it never changes the live stock quantity automatically.
-  need_(u, WRITE);
-  return locked_(p, () => {
-    const it = item_(clean_(p.itemId, 40, true, 'Item ID'));
-    if (it.o.Status !== 'ACTIVE') throw new Error('Item is archived');
-    const counted = num_(p.countedQty, 'Physical counted quantity', 0);
-    const identity = String(p.identityMatch || '').toUpperCase();
-    if (!['YES', 'NO'].includes(identity)) throw new Error('Please confirm whether the physical item matches the system');
-    const systemQty = it.o.Quantity === '' ? '' : Number(it.o.Quantity);
-    const variance = systemQty === '' ? '' : Math.round((counted - systemQty) * 100) / 100;
-    const result = identity === 'NO' ? 'ITEM_MISMATCH' : (systemQty === '' ? 'SYSTEM_QTY_UNVERIFIED' : (variance === 0 ? 'MATCHED' : 'QTY_VARIANCE'));
-    const id = nextId_('STOCK_CHECKS', 'CHK-', 6);
-    sheet_('STOCK_CHECKS').appendRow([id, new Date(), it.o.ItemID, it.o.Name, systemQty, counted, variance, identity,
-      clean_(p.notes, 300), u.username, result]);
-    audit_(u, 'STOCK_CHECKED', it.o.ItemID,
-      { systemQty: systemQty, itemName: it.o.Name },
-      { countedQty: counted, variance: variance, identityMatch: identity, result: result, checkId: id }, 'STOCK_CHECK');
-    return { checkId: id, itemId: it.o.ItemID, itemName: it.o.Name, systemQty: systemQty, countedQty: counted, variance: variance, identityMatch: identity, result: result };
-  });
-}
-
-
-/* ---------- Stock verification dashboard ---------- */
-function stockVerificationDashboard_(p, u) {
-  need_(u, WRITE);
-  const sh = SpreadsheetApp.getActive().getSheetByName('STOCK_CHECKS');
-  if (!sh) throw new Error('STOCK_CHECKS sheet is missing. Run upgradeStockChecksSheet() once in Apps Script.');
-  const active = activeItems_();
-  const checks = rows_('STOCK_CHECKS').sort((a, b) => Date.parse(b.Timestamp) - Date.parse(a.Timestamp));
-  const latest = {};
-  checks.forEach(c => { if (!latest[c.ItemID]) latest[c.ItemID] = c; });
-  const activeIds = new Set(active.map(i => i.ItemID));
-  const current = active.map(i => ({ item: i, check: latest[i.ItemID] || null }));
-  const counts = { total: active.length, checked: 0, matched: 0, quantityVariance: 0, itemMismatch: 0, systemUnverified: 0 };
-  current.forEach(x => {
-    if (!x.check) return;
-    counts.checked++;
-    if (x.check.Result === 'MATCHED') counts.matched++;
-    else if (x.check.Result === 'QTY_VARIANCE') counts.quantityVariance++;
-    else if (x.check.Result === 'ITEM_MISMATCH') counts.itemMismatch++;
-    else if (x.check.Result === 'SYSTEM_QTY_UNVERIFIED') counts.systemUnverified++;
-  });
-  counts.pending = Math.max(0, counts.total - counts.checked);
-  return {
-    counts: counts,
-    latestChecks: checks.filter(c => activeIds.has(c.ItemID)).slice(0, 40).map(c => ({
-      checkId: c.CheckID, timestamp: c.Timestamp, itemId: c.ItemID, itemName: c.ItemName,
-      systemQty: c.SystemQty, countedQty: c.CountedQty, variance: c.Variance,
-      identityMatch: c.IdentityMatch, notes: c.Notes, checkedBy: c.CheckedBy, result: c.Result
-    }))
-  };
-}
-
-
 function move_(p, u, type) {                     // STOCK_IN | STOCK_OUT | ADJUSTMENT
   need_(u, type === 'ADJUSTMENT' ? WRITE : MOVE);
   return locked_(p, () => {
@@ -508,68 +450,6 @@ function move_(p, u, type) {                     // STOCK_IN | STOCK_OUT | ADJUS
   });
 }
 
-
-
-/* ---------- STOCK ORDERS ---------- */
-function listOrders_() {
-  return rows_('ORDERS').slice().reverse();
-}
-function createOrder_(p, u) {
-  need_(u, WRITE);
-  return locked_(p, () => {
-    const it = item_(clean_(p.itemId, 30, true, 'Item'));
-    if (it.o.Status !== 'ACTIVE') throw new Error('Item is archived');
-    const qty = num_(p.qty, 'Order quantity', 0.01);
-    const supplier = clean_(p.supplier, 100, true, 'Supplier');
-    const ref = clean_(p.reference, 100);
-    const expected = clean_(p.expectedDate, 20);
-    if (expected && !/^\d{4}-\d{2}-\d{2}$/.test(expected)) throw new Error('Invalid expected date');
-    const id = nextId_('ORDERS', 'ORD-', 6), now = new Date();
-    sheet_('ORDERS').appendRow([id, now, it.o.ItemID, it.o.Name, qty, 0, it.o.Unit, supplier, ref, expected, clean_(p.notes, 300), 'ORDERED', u.username, now, u.username]);
-    audit_(u, 'STOCK_ORDERED', id, '', { itemId: it.o.ItemID, qty: qty, supplier: supplier }, 'ORDER');
-    return { orderId: id };
-  });
-}
-function receiveOrder_(p, u) {
-  need_(u, WRITE);
-  return locked_(p, () => {
-    const sh = sheet_('ORDERS'), vals = sh.getDataRange().getValues(), h = vals[0];
-    const idx = vals.findIndex((r, i) => i > 0 && r[0] === p.orderId);
-    if (idx < 1) throw new Error('Order not found');
-    const row = idx + 1, o = Object.fromEntries(h.map((k, j) => [k, vals[idx][j]]));
-    if (['RECEIVED','CANCELLED'].includes(o.Status)) throw new Error('This order is already closed');
-    const remaining = Number(o.QtyOrdered) - Number(o.QtyReceived);
-    const q = num_(p.qty, 'Received quantity', 0.01);
-    if (q > remaining) throw new Error('Received quantity exceeds remaining order quantity (' + remaining + ')');
-    const it = item_(o.ItemID);
-    if (it.o.Quantity === '') throw new Error('Item quantity is not counted. A supervisor must count it first.');
-    const prev = Number(it.o.Quantity), nw = Math.round((prev + q) * 100) / 100;
-    upd_(it, { Quantity: nw, NeedsCount: false }, u);
-    txn_(it.o, 'STOCK_IN', prev, q, nw, { supplier: o.Supplier, ref: o.Reference, remarks: 'Received against ' + o.OrderID }, u);
-    const got = Number(o.QtyReceived) + q, status = got >= Number(o.QtyOrdered) ? 'RECEIVED' : 'PARTIAL';
-    sh.getRange(row, h.indexOf('QtyReceived') + 1).setValue(got);
-    sh.getRange(row, h.indexOf('Status') + 1).setValue(status);
-    sh.getRange(row, h.indexOf('UpdatedAt') + 1).setValue(new Date());
-    sh.getRange(row, h.indexOf('UpdatedBy') + 1).setValue(u.username);
-    audit_(u, 'ORDER_RECEIVED', o.OrderID, { received: o.QtyReceived }, { received: got, status: status }, 'ORDER');
-    return { received: got, remaining: Number(o.QtyOrdered) - got, status: status };
-  });
-}
-function cancelOrder_(p, u) {
-  need_(u, WRITE);
-  return locked_(p, () => {
-    const sh = sheet_('ORDERS'), vals = sh.getDataRange().getValues(), h = vals[0];
-    const idx = vals.findIndex((r, i) => i > 0 && r[0] === p.orderId);
-    if (idx < 1) throw new Error('Order not found');
-    const status = vals[idx][h.indexOf('Status')];
-    if (['RECEIVED','CANCELLED'].includes(status)) throw new Error('This order is already closed');
-    sh.getRange(idx + 1, h.indexOf('Status') + 1).setValue('CANCELLED');
-    sh.getRange(idx + 1, h.indexOf('UpdatedAt') + 1).setValue(new Date());
-    sh.getRange(idx + 1, h.indexOf('UpdatedBy') + 1).setValue(u.username);
-    audit_(u, 'ORDER_CANCELLED', p.orderId, { status: status }, { status: 'CANCELLED' }, 'ORDER');
-    return true;
-  });
-}
 
 
 /* ---------- PHASE 3: restore, racks, history ---------- */
@@ -696,26 +576,7 @@ function saveSettings_(p, u) {
 }
 
 /* ---------- ONE-TIME SETUP (run from the Apps Script editor) ---------- */
-// Run once in Apps Script editor for an existing HEIMS spreadsheet before using Stock Orders.
-function upgradeOrdersSheet() {
-  const ss = SpreadsheetApp.getActive();
-  if (ss.getSheetByName('ORDERS')) return 'ORDERS sheet already exists.';
-  const sh = ss.insertSheet('ORDERS');
-  sh.getRange(1, 1, 1, HEAD.ORDERS.length).setValues([HEAD.ORDERS]).setFontWeight('bold');
-  sh.setFrozenRows(1);
-  return 'ORDERS sheet created. Stock Orders is ready.';
-}
-
-// Run once in Apps Script editor to add the physical stock verification log. Existing sheets/data are untouched.
-function upgradeStockChecksSheet() {
-  const ss = SpreadsheetApp.getActive();
-  if (ss.getSheetByName('STOCK_CHECKS')) return 'STOCK_CHECKS sheet already exists.';
-  const sh = ss.insertSheet('STOCK_CHECKS');
-  sh.getRange(1, 1, 1, HEAD.STOCK_CHECKS.length).setValues([HEAD.STOCK_CHECKS]).setFontWeight('bold');
-  sh.setFrozenRows(1);
-  return 'STOCK_CHECKS sheet created. QR Stock Check is ready.';
-}
-
+// Existing spreadsheets automatically receive the Ordered column on the next inventory load.
 function setup() {
   const ss = SpreadsheetApp.getActive();
   if (ss.getSheetByName('ITEMS')) throw new Error('Already set up. Use a fresh spreadsheet.');
@@ -729,7 +590,7 @@ function setup() {
   const add = (n, r) => sheet_(n).getRange(2, 1, r.length, r[0].length).setValues(r);
   add('CATEGORIES', CATS.map((c, i) => [c, i + 1, true]));
   add('LOCATIONS', RACKS.map(r => ['Rack ' + r, '', true]));
-  add('ITEMS', SEED.map((s, i) => ['ITM-' + String(i + 1).padStart(4, '0'), s[2], s[3], s[1], s[4], s[5], '', s[6], s[7], 'Rack ' + s[0], 0, '', s[8], 'ACTIVE', s[6] === '', now, 'SYSTEM_SEED', now, 'SYSTEM_SEED']));
+  add('ITEMS', SEED.map((s, i) => ['ITM-' + String(i + 1).padStart(4, '0'), s[2], s[3], s[1], s[4], s[5], '', s[6], s[7], 'Rack ' + s[0], 0, '', s[8], 'ACTIVE', s[6] === '', now, 'SYSTEM_SEED', now, 'SYSTEM_SEED', false]));
   add('SETTINGS', [['HOTEL_NAME', 'Hotel Engineering'], ['RECENT_DAYS', 7]]);
   add('AUDIT_LOG', [['AUD-000001', now, 'SYSTEM', 'DB_SETUP', 'SYSTEM', '', '', SEED.length + ' items imported']]);
   const pw = Utilities.getUuid().slice(0, 8), salt = Utilities.getUuid();
