@@ -29,7 +29,7 @@ function moveInd() {
   a.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
 }
 addEventListener('resize', moveInd);
-function toast(m, t = '') { const d = document.createElement('div'); d.className = 'toast ' + t; d.textContent = m; $('#toasts').append(d); setTimeout(() => d.remove(), 3500); }
+function toast(m, t = '', duration = 3500) { const d = document.createElement('div'); d.className = 'toast ' + t; d.textContent = m; $('#toasts').append(d); if (duration > 0) setTimeout(() => d.remove(), duration); return d; }
 function setTheme(t) { document.documentElement.dataset.theme = t; localStorage.setItem('theme', t); }
 function logout(expired) {
   if (!expired) api('logout', { rt: localStorage.rt }).catch(() => {});

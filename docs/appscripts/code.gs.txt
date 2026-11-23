@@ -20,7 +20,7 @@ const SESSION_SECS = 21600; // 6h (CacheService max)
 
 /* ---------- ROUTER ---------- */
 const API = { login: login_, logout: logout_, resume: resume_, uploadImage: uploadImage_, inventory: inventory_, dashboard: dashboard_,
-  addItem: addItem_, editItem: editItem_, archiveItem: archiveItem_, restoreItem: restoreItem_,
+  addItem: addItem_, editItem: editItem_, adminUpdateItem: adminUpdateItem_, archiveItem: archiveItem_, restoreItem: restoreItem_,
   addLocation: addLocation_, transferItems: transferItems_, history: history_, auditLog: auditLog_,
   changePassword: changePassword_, listUsers: listUsers_, saveUser: saveUser_, resetPassword: resetPassword_,
   addCategory: addCategory_, renameCategory: renameCategory_, getSettings: getSettings_, saveSettings: saveSettings_,
@@ -344,6 +344,77 @@ function editItem_(p, u) {                       // quantity is NOT editable her
     return { changed: Object.keys(after).length };
   });
 }
+function adminUpdateItem_(p, u) {
+  // Admin-only inventory editor: item details and verified system balance are saved atomically.
+  need_(u, ['ADMIN']);
+  return locked_(p, () => {
+    const it = item_(clean_(p.itemId, 40, true, 'Item ID'));
+    if (it.o.Status !== 'ACTIVE') throw new Error('Item is archived');
+
+    const f = itemFields_(p), before = {}, after = {};
+    Object.keys(f).forEach(k => {
+      if (String(it.o[k] == null ? '' : it.o[k]) !== String(f[k] == null ? '' : f[k])) {
+        before[k] = it.o[k];
+        after[k] = f[k];
+      }
+    });
+
+    const hasQuantity = Object.prototype.hasOwnProperty.call(p, 'quantity') && String(p.quantity) !== '';
+    const previousQty = it.o.Quantity;
+    let nextQty = previousQty, stockChanged = false, stockReason = '';
+    if (hasQuantity) {
+      nextQty = num_(p.quantity, 'Stock quantity', 0);
+      stockChanged = previousQty === '' || previousQty == null
+        ? true
+        : Number(previousQty) !== nextQty;
+      if (stockChanged) {
+        stockReason = clean_(p.stockReason, 300, true, 'Reason for stock change');
+      }
+    }
+
+    if (!Object.keys(after).length && !stockChanged) {
+      return { changed: 0, stockChanged: false, item: it.o };
+    }
+
+    const patch = Object.assign({}, f);
+    if (stockChanged) {
+      patch.Quantity = nextQty;
+      patch.NeedsCount = false;
+    }
+    upd_(it, patch, u);
+
+    if (after.Rack) {
+      txn_(it.o, 'TRANSFER', previousQty, 0, previousQty,
+        { remarks: String(before.Rack || '') + ' -> ' + after.Rack }, u);
+    }
+    if (Object.keys(after).length) {
+      txn_(it.o, 'ITEM_EDITED', previousQty, 0, previousQty,
+        { remarks: 'Changed: ' + Object.keys(after).join(', ') }, u);
+      audit_(u, 'ITEM_EDITED', p.itemId, before, after);
+    }
+    if (stockChanged) {
+      const delta = Math.round((nextQty - (Number(previousQty) || 0)) * 100) / 100;
+      txn_(it.o, 'STOCK_ADJUSTMENT', previousQty, delta, nextQty,
+        { remarks: stockReason }, u);
+      audit_(u, 'ADMIN_STOCK_UPDATED', p.itemId,
+        { quantity: previousQty },
+        { quantity: nextQty, reason: stockReason }, 'STOCK');
+    }
+
+    const updatedItem = Object.assign({}, it.o, patch, {
+      UpdatedAt: new Date(),
+      UpdatedBy: u.username
+    });
+    return {
+      changed: Object.keys(after).length,
+      stockChanged: stockChanged,
+      previousQty: previousQty,
+      qty: nextQty,
+      item: updatedItem
+    };
+  });
+}
+
 function archiveItem_(p, u) {                    // soft delete: row and history are kept
   need_(u, WRITE);
   return locked_(p, () => {

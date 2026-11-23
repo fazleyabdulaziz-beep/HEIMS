@@ -41,15 +41,60 @@ document.addEventListener('change', async e => {
 function itemForm(it) {
   PIC.data = null;
   const e = !!it; it = it || {};
+  const admin = can('ADMIN');
+  const stockField = e && admin
+    ? `${fld('quantity', 'Stock quantity (leave blank to keep unchanged)', it.Quantity === '' ? '' : it.Quantity, 'type=number min=0 step=any')}${fld('stockReason', 'Reason for stock change', '', 'maxlength=300')}`
+    : '';
+  const stockHint = e && admin
+    ? '<p class="mut sm">Admin can update stock here. Any quantity change is recorded in Transaction History and Audit Log; a reason is required.</p>'
+    : e
+      ? '<p class="mut sm">Stock quantity can only be changed by Admin. Use QR Stock Movement for normal Stock In / Stock Out.</p>'
+      : '';
   modal(e ? 'Edit Item' : 'Add Item', `<div class="fg">${fld('name', 'Item name *', it.Name, 'required')}${sel('category', 'Category *', S.cats, it.Category)}
    ${fld('subcategory', 'Subcategory', it.Subcategory)}${fld('brand', 'Brand', it.Brand)}${fld('model', 'Model number', it.Model)}${sel('rack', 'Rack / location *', S.racks, it.Rack)}
    ${fld('unit', 'Unit *', it.Unit || 'PCS', 'required')}${fld('minStock', 'Minimum stock level', it.MinStock ?? 0, 'type=number min=0 step=any')}
-   ${e ? '' : fld('quantity', 'Opening quantity (blank = needs count)', '', 'type=number min=0 step=any')}<div class="ph"><label>Photo (optional)</label><div class="phr">${it.ImageURL ? `<img class="th lg" id="ph-prev" alt="" src="${esc(imgUrl(it.ImageURL, 160))}">` : `<span class="th lg ph0" id="ph-prev">${NOPIC}</span>`}<input type="file" id="ph" accept="image/*" hidden><button type="button" class="btn g sm" id="ph-pick">Take or choose photo</button><button type="button" class="btn g sm" id="ph-rm" ${it.ImageURL ? '' : 'hidden'}>Remove</button></div><input type="hidden" name="imageUrl" value="${esc(it.ImageURL || '')}"></div>
-   ${fld('description', 'Description', it.Description)}${fld('remarks', 'Remarks', it.Remarks)}</div>${e ? '<p class="mut">To change quantity, open QR Stock Movement and scan or search this item.</p>' : ''}`,
-    e ? 'Save changes' : 'Add item', async d => {
-      if (PIC.data) d.imageUrl = (await api('uploadImage', { data: PIC.data, rid: rid() })).url;
-      await api(e ? 'editItem' : 'addItem', { ...d, itemId: it.ItemID, rid: rid() });
-      toast(e ? 'Item updated' : 'Item added'); await load(true); drawTable();
+   ${!e ? fld('quantity', 'Opening quantity (blank = needs count)', '', 'type=number min=0 step=any') : stockField}
+   <div class="ph"><label>Photo (optional)</label><div class="phr">${it.ImageURL ? `<img class="th lg" id="ph-prev" alt="" src="${esc(imgUrl(it.ImageURL, 160))}">` : `<span class="th lg ph0" id="ph-prev">${NOPIC}</span>`}<input type="file" id="ph" accept="image/*" hidden><button type="button" class="btn g sm" id="ph-pick">Take or choose photo</button><button type="button" class="btn g sm" id="ph-rm" ${it.ImageURL ? '' : 'hidden'}>Remove</button></div><input type="hidden" name="imageUrl" value="${esc(it.ImageURL || '')}"></div>
+   ${fld('description', 'Description', it.Description)}${fld('remarks', 'Remarks', it.Remarks)}</div>${stockHint}`,
+    e ? 'Save changes' : 'Add item', async () => {}, '', d => {
+      const photoData = PIC.data;
+      PIC.data = null;
+      const pending = toast('Saving changes…', 'pending', 0);
+      const requestId = rid();
+      requestAnimationFrame(() => {
+        (async () => {
+          if (photoData) d.imageUrl = (await api('uploadImage', { data: photoData, rid: rid() })).url;
+          const action = e ? (admin ? 'adminUpdateItem' : 'editItem') : 'addItem';
+          const result = await api(action, { ...d, itemId: it.ItemID, rid: requestId });
+          if (e && result && result.item) {
+            const index = S.items.findIndex(x => x.ItemID === it.ItemID);
+            if (index >= 0) {
+              const merged = { ...S.items[index], ...result.item };
+              const min = Number(merged.MinStock) || 0;
+              merged.st = merged.Quantity === '' || merged.Quantity == null
+                ? 'UNVERIFIED'
+                : Number(merged.Quantity) <= 0 ? 'OUT'
+                  : Number(merged.Quantity) <= min ? 'LOW' : 'IN';
+              S.items[index] = merged;
+            }
+            S.loaded = true;
+            if (location.hash.replace('#', '') === 'inventory') drawTable();
+          } else {
+            S.loaded = false;
+            if (location.hash.replace('#', '') === 'inventory') {
+              await load(true);
+              drawTable();
+            }
+          }
+          pending.className = 'toast';
+          pending.textContent = e ? 'Changes saved successfully' : 'Item added successfully';
+          setTimeout(() => pending.remove(), 3500);
+        })().catch(error => {
+          pending.className = 'toast bad';
+          pending.textContent = `Save failed: ${error.message || 'Please try again.'}`;
+          setTimeout(() => pending.remove(), 6000);
+        });
+      });
     });
 }
 function archive(id) {

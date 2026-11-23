@@ -32,7 +32,7 @@ const API_READ_TTL = { inventory: 20000, dashboard: 15000, history: 12000, audit
   listOrders: 12000, listUsers: 15000, getSettings: 30000, stockVerificationDashboard: 10000 };
 const _apiCache = new Map(), _apiPending = new Map();
 const API_WRITES = new Set(['uploadImage','addItem','editItem','archiveItem','restoreItem','addLocation','transferItems',
-  'stockIn','stockOut','adjustStock','changePassword','saveUser','resetPassword','addCategory','renameCategory',
+  'stockIn','stockOut','adjustStock','adminUpdateItem','changePassword','saveUser','resetPassword','addCategory','renameCategory',
   'saveSettings','createOrder','receiveOrder','cancelOrder','recordStockCheck']);
 function clearApiCache() { _apiCache.clear(); if (typeof S !== 'undefined') S.loaded = false; }
 async function request(action, payload) {
