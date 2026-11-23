@@ -1,7 +1,7 @@
-const CACHE = 'heims-shell-v16-ordered-manager-report';
+const CACHE = 'heims-shell-v17-fast';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './css/style.css?v=21',
-  './js/config.js?v=10', './js/api.js?v=26', './js/pwa.js?v=1', './js/forms.js?v=17', './js/pages.js?v=12',
-  './js/admin.js?v=13', './js/qr.js?v=13', './js/app.js?v=17', './pwa-192.png', './pwa-512.png',
+  './js/config.js?v=10', './js/api.js?v=27', './js/pwa.js?v=1', './js/forms.js?v=17', './js/pages.js?v=12',
+  './js/admin.js?v=13', './js/qr.js?v=13', './js/app.js?v=18', './pwa-192.png', './pwa-512.png',
   './logo.png', './logo-dark.png', './heims.png', './heims-dark.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -13,6 +13,13 @@ self.addEventListener('fetch', event => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  // CDN libraries (QR scanner / generator / PDF) are versioned and immutable: cache-first for instant repeat loads.
+  if (url.hostname === 'cdn.jsdelivr.net') {
+    event.respondWith(caches.match(req).then(cached => cached || fetch(req).then(response => {
+      const copy = response.clone(); caches.open(CACHE).then(cache => cache.put(req, copy)).catch(() => {}); return response;
+    })));
+    return;
+  }
   if (url.origin !== self.location.origin) return;
   // HTML stays network-first so deployments and app updates are picked up promptly.
   if (req.mode === 'navigate' || url.pathname.endsWith('/index.html') || url.pathname === new URL('./', self.location).pathname) {

@@ -43,6 +43,8 @@ function logout(expired) {
 function start() {
   const u = JSON.parse(sessionStorage.user); $('#who').textContent = `${u.name} · ${u.role}`;
   applyRoles(); $('#hotel').textContent = sessionStorage.hotel || ''; $('#login').hidden = true; $('#app').hidden = false; route();
+  // Warm the inventory cache in the background so the Inventory / Report pages open instantly.
+  if (location.hash !== '#inventory' && location.hash !== '#reports') setTimeout(() => load().catch(() => {}), 400);
 }
 async function load(force) {
   if (S.loaded && !force) return;
