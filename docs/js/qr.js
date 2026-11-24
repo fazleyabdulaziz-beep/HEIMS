@@ -107,24 +107,42 @@ async function onQRDecoded(raw) {
 }
 
 function showQRItemResult(i) {
-  // A scan/search result is shown as a focused pop-up so technicians can identify
-  // the physical spare part by its photo before recording a movement.
+  // Focused pop-up: identify the part by photo, then press − / + to move stock. The balance updates instantly
+  // and each tap is saved to Google Sheets in the background (queued in order, one request per tap).
   document.querySelectorAll('.qr-item-overlay').forEach(el => el.remove());
-  const quantity = i.Quantity === '' ? 'Not counted' : `${esc(i.Quantity)} ${esc(i.Unit)}`;
+  const counted = i.Quantity !== '' && i.Quantity != null;
+  const canMove = can('ADMIN', 'SUPERVISOR', 'TECHNICIAN');
+  const u = JSON.parse(sessionStorage.user || '{}');
   const image = i.ImageURL
     ? `<img class="qr-item-photo" decoding="async" fetchpriority="high" src="${esc(imgUrl(i.ImageURL, 800))}" alt="${esc(i.Name)}">`
     : `<div class="qr-item-photo qr-item-no-photo">${NOPIC}<span>No item photo</span></div>`;
+  const stepper = canMove && counted ? `
+    <div class="qs" data-qs-root>
+      <div class="qs-bal">
+        <small class="mut">Current balance</small>
+        <div class="qs-row">
+          <button type="button" class="qs-btn out" data-qs="out" aria-label="Stock out (minus)">&minus;</button>
+          <div class="qs-num"><strong data-qs-num>${esc(i.Quantity)}</strong><span>${esc(i.Unit || '')}</span></div>
+          <button type="button" class="qs-btn in" data-qs="in" aria-label="Stock in (plus)">+</button>
+        </div>
+        <div class="qs-status mut sm" data-qs-status aria-live="polite">Tap &minus; to take out · + to add in</div>
+      </div>
+      <div class="qs-step" role="group" aria-label="Quantity per tap"><span class="mut sm">Per tap</span>${[1, 5, 10].map((n, k) => `<button type="button" class="qs-chip ${k ? '' : 'on'}" data-qs-step="${n}">${n}</button>`).join('')}</div>
+      <div class="fg qs-fields"><div><label>Staff name / ID</label><input name="qs-staff" value="${esc(u.name || '')}" maxlength="80" autocomplete="off"></div>
+        <div><label>Location used</label><input name="qs-dept" value="${esc(localStorage.qsDept || '')}" maxlength="80" placeholder="Room no. / area" autocomplete="off"></div></div>
+      <p class="mut sm qs-hint">Staff and location are needed for &minus; (Stock Out) only.</p>
+    </div>` : '';
   const overlay = document.createElement('div');
   overlay.className = 'ov qr-item-overlay';
   overlay.innerHTML = `<section class="card qr-found-modal" role="dialog" aria-modal="true" aria-label="Found inventory item">
     <div class="qr-pop-head"><span class="b ok">ITEM FOUND</span><button class="btn g sm" type="button" data-qr-close aria-label="Close item details">✕</button></div>
     ${image}
-    <div class="qr-pop-body"><div class="qr-found-main"><div><h3>${esc(i.Name)}</h3><span class="id">${esc(i.ItemID)}</span></div>${badge(i.st)}${orderedBadge(i)}</div>
-      <div class="qr-details"><span><small class="mut">Current quantity</small><b>${quantity}</b></span><span><small class="mut">Rack / location</small><b>${esc(i.Rack || '-')}</b></span><span><small class="mut">Category</small><b>${esc(i.Category || '-')}</b></span><span><small class="mut">Minimum stock</small><b>${esc(i.MinStock ?? 0)} ${esc(i.Unit || '')}</b></span></div>
-      ${i.Quantity === '' ? `<p class="dash-note">This item has no opening quantity yet. An Admin or Supervisor must record its initial quantity using Stock Adjustment before Stock In or Stock Out.</p>` : ''}
+    <div class="qr-pop-body"><div class="qr-found-main"><div><h3>${esc(i.Name)}</h3><span class="id">${esc(i.ItemID)}</span></div><span data-qs-badge>${badge(i.st)}</span>${orderedBadge(i)}</div>
+      ${stepper}
+      <div class="qr-details"><span><small class="mut">Rack / location</small><b>${esc(i.Rack || '-')}</b></span><span><small class="mut">Category</small><b>${esc(i.Category || '-')}</b></span><span><small class="mut">Minimum stock</small><b>${esc(i.MinStock ?? 0)} ${esc(i.Unit || '')}</b></span>${counted ? '' : '<span><small class="mut">Current quantity</small><b>Not counted</b></span>'}</div>
+      ${!counted ? `<p class="dash-note">This item has no opening quantity yet. An Admin or Supervisor must record its initial quantity using Stock Adjustment before Stock In or Stock Out.</p>` : ''}
       <div class="qr-actions">
-        ${can('ADMIN','SUPERVISOR','TECHNICIAN') ? `<button class="btn" data-qr-move="in" data-item="${esc(i.ItemID)}">Stock In</button><button class="btn" data-qr-move="out" data-item="${esc(i.ItemID)}">Stock Out</button>` : ''}
-        ${can('ADMIN','SUPERVISOR') ? `<button class="btn g" data-qr-move="adj" data-item="${esc(i.ItemID)}">Stock Adjustment</button>` : ''}
+        ${can('ADMIN', 'SUPERVISOR') ? `<button class="btn g" data-qr-move="adj" data-item="${esc(i.ItemID)}">Stock Adjustment</button>` : ''}
         <button class="btn g" data-qr-label="${esc(i.ItemID)}">Print QR Label</button>
       </div>
     </div></section>`;
@@ -133,146 +151,91 @@ function showQRItemResult(i) {
   });
   document.body.append(overlay);
   $('#qr-item-result').innerHTML = '';
+  if (stepper) initQRStepper(overlay, i);
 }
 
-/* ---------- Direct QR stock movement workflow ---------- */
-const QR_MOVES = {
-  in: { title: 'Stock In', action: 'stockIn', fields: [['qty', 'Quantity received', 'number', 1], ['remarks', 'Remarks', 'text', 0]] },
-  out: { title: 'Stock Out', action: 'stockOut', fields: [['qty', 'Quantity taken', 'number', 1], ['staff', 'Staff name / ID', 'text', 1], ['dept', 'Location used (room no. or area)', 'text', 1], ['remarks', 'Remarks', 'text', 0]] },
-  adj: { title: 'Stock Adjustment', action: 'adjustStock', fields: [['newQty', 'New verified quantity', 'number', 1], ['reason', 'Reason for adjustment', 'text', 1]] }
-};
+/* ---------- − / + stepper: instant balance, saved in the background ---------- */
+const QS_CACHE = {};   // itemId -> state, so reopening an item with saves still in flight shows the right balance
+function initQRStepper(overlay, item) {
+  const id = item.ItemID, root = overlay.querySelector('[data-qs-root]');
+  const numEl = root.querySelector('[data-qs-num]'), statusEl = root.querySelector('[data-qs-status]'), badgeEl = overlay.querySelector('[data-qs-badge]');
+  const staffEl = root.querySelector('[name="qs-staff"]'), deptEl = root.querySelector('[name="qs-dept"]');
+  const st = QS_CACHE[id] && QS_CACHE[id].inflight > 0 ? QS_CACHE[id]
+    : (QS_CACHE[id] = { confirmed: Number(item.Quantity) || 0, pending: 0, inflight: 0, step: 1, chain: Promise.resolve(), msg: '', msgCls: '' });
+  const round = n => Math.round(n * 100) / 100;
+  const shown = () => round(st.confirmed + st.pending);
+  const stOf = q => q <= 0 ? 'OUT' : q <= (Number(item.MinStock) || 0) ? 'LOW' : 'IN';
+  function render() {
+    if (!overlay.isConnected) return;
+    const q = shown(), s = stOf(q);
+    numEl.textContent = q; numEl.className = s === 'OUT' ? 'bad' : s === 'LOW' ? 'warn' : '';
+    badgeEl.innerHTML = badge(s);
+    root.querySelector('[data-qs="out"]').disabled = q <= 0;
+    root.querySelectorAll('[data-qs-step]').forEach(c => c.classList.toggle('on', Number(c.dataset.qsStep) === st.step));
+    statusEl.className = 'qs-status sm ' + (st.inflight ? 'mut' : st.msgCls || 'mut');
+    statusEl.innerHTML = st.inflight ? `<span class="qs-spin" aria-hidden="true"></span> Saving ${st.inflight > 1 ? st.inflight + ' changes' : 'change'}…` : esc(st.msg || 'Tap − to take out · + to add in');
+  }
+  function syncLocal(qty) {
+    const idx = S.items.findIndex(x => x.ItemID === id);
+    if (idx >= 0) S.items[idx] = { ...S.items[idx], Quantity: qty, st: stOf(qty) };
+  }
+  function tap(kind) {
+    const step = st.step, delta = kind === 'in' ? step : -step;
+    const staff = staffEl.value.trim(), dept = deptEl.value.trim();
+    if (kind === 'out') {
+      [[staffEl, staff], [deptEl, dept]].forEach(([el, v]) => el.classList.toggle('need', !v));
+      if (!staff || !dept) { st.msg = !staff ? 'Enter staff name / ID first.' : 'Enter the location used first.'; st.msgCls = 'bad'; render(); (!staff ? staffEl : deptEl).focus(); return; }
+      if (shown() + delta < 0) { st.msg = `Not enough stock — only ${shown()} left.`; st.msgCls = 'bad'; render(); try { navigator.vibrate && navigator.vibrate(60); } catch (_) {} return; }
+      try { localStorage.qsDept = dept; } catch (_) {}
+    }
+    try { navigator.vibrate && navigator.vibrate(15); } catch (_) {}
+    st.pending = round(st.pending + delta); st.inflight++; st.msg = ''; st.msgCls = '';
+    render();                                                   // balance changes immediately
+    const payload = { itemId: id, qty: step, rid: rid(), remarks: '', ...(kind === 'out' ? { staff, dept } : {}) };
+    const action = kind === 'in' ? 'stockIn' : 'stockOut';
+    st.chain = st.chain.then(async () => {                      // one-at-a-time, in tap order
+      try {
+        const r = await api(action, payload), q = Number(r && r.qty);
+        if (!Number.isFinite(q)) throw new Error('Saved, but the server returned no balance. Check inventory.');
+        st.pending = round(st.pending - delta); st.confirmed = q; st.inflight--;
+        syncLocal(shown());
+        st.msg = st.inflight ? '' : `Saved ✓ ${kind === 'in' ? '+' : '−'}${step} · balance confirmed`; st.msgCls = 'ok';
+      } catch (err) {
+        st.pending = round(st.pending - delta); st.inflight--;
+        const uncertain = /timed out|cannot reach server|failed to fetch|networkerror/i.test(String(err && err.message));
+        st.msg = uncertain ? 'Connection lost — not confirmed. Re-checking balance…' : (err && err.message) || 'Could not save.'; st.msgCls = 'bad';
+        toast(`${kind === 'in' ? 'Stock In' : 'Stock Out'} failed: ${st.msg}`, 'bad', 6000);
+        if (uncertain) { try { await load(true); const f = S.items.find(x => x.ItemID === id); if (f && !st.inflight) { st.confirmed = Number(f.Quantity) || 0; st.pending = 0; st.msg = 'Balance re-checked from server. Verify in Transaction History.'; } } catch (_) {} }
+      }
+      st.render();
+    });
+  }
+  root.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.qs) tap(b.dataset.qs);
+    if (b.dataset.qsStep) { st.step = Number(b.dataset.qsStep); render(); }
+  });
+  [staffEl, deptEl].forEach(el => el.addEventListener('input', () => el.classList.remove('need')));
+  st.render = render; render();
+}
 
+/* ---------- Stock Adjustment (Admin / Supervisor) ---------- */
 function openQRMoveModal(itemId, kind) {
   const i = S.items.find(x => x.ItemID === itemId);
   if (!i) { toast('Item not found. Refresh inventory and scan again.', 'bad'); return; }
-  const manager = can('ADMIN', 'SUPERVISOR');
-  const allowed = kind === 'adj' ? manager : can('ADMIN', 'SUPERVISOR', 'TECHNICIAN');
-  if (!allowed) { toast('Your role does not have permission for this stock action.', 'bad'); return; }
-  if ((kind === 'in' || kind === 'out') && i.Quantity === '') {
-    toast('Initial quantity is not recorded. Ask an Admin or Supervisor to perform Stock Adjustment first.', 'bad');
-    return;
-  }
-
-  const cfg = QR_MOVES[kind];
-  if (!cfg) return;
-  const u = JSON.parse(sessionStorage.user || '{}');
+  if (kind !== 'adj') return;                                   // Stock In / Out now use the − / + buttons
+  if (!can('ADMIN', 'SUPERVISOR')) { toast('Your role does not have permission for this stock action.', 'bad'); return; }
   const photo = i.ImageURL
     ? `<img class="qr-move-photo" src="${esc(imgUrl(i.ImageURL, 240))}" alt="${esc(i.Name)}">`
     : `<div class="qr-move-photo qr-item-no-photo">${NOPIC}</div>`;
   const summary = `<div class="qr-check-item">${photo}<div><b>${esc(i.Name)}</b><small class="mut">${esc(i.ItemID)} · ${esc(i.Rack || '-')}</small><small class="mut">Current stock: <strong>${i.Quantity === '' ? 'Not counted' : `${esc(i.Quantity)} ${esc(i.Unit || '')}`}</strong></small></div></div>`;
-  const fields = cfg.fields.map(([name, label, type, required]) => {
-    const attrs = type === 'number'
-      ? `type="number" min="${kind === 'adj' ? '0' : '0.01'}" step="any" ${required ? 'required' : ''}`
-      : `${required ? 'required' : ''} maxlength="300"`;
-    const value = name === 'staff' ? u.name || '' : '';
-    return fld(name, label + (required ? ' *' : ''), value, attrs);
-  }).join('');
-  const helper = kind === 'adj'
-    ? '<p class="mut sm">Adjustment sets the new actual stock balance. Use only after physically checking the quantity.</p>'
-    : kind === 'out'
-      ? '<p class="mut sm">Record who took the item and where it will be used.</p>'
-      : '<p class="mut sm">Record the quantity received into inventory.</p>';
-
-  const beginMovement = data => {
-    if (kind === 'adj') {
-      api(cfg.action, { ...data, itemId: i.ItemID, rid: rid() })
-        .then(() => { S.loaded = false; toast(`${cfg.title} recorded successfully. Open inventory to refresh the latest balance.`, 'ok'); })
-        .catch(error => toast(error.message || 'Stock adjustment failed.', 'bad'));
-      return;
-    }
-
-    const previousQty = Number(i.Quantity || 0);
-    const requestedQty = Number(data.qty);
-    const requestId = rid();
-    const payload = { ...data, itemId: i.ItemID, rid: requestId };
-    const pending = showQRMovePending(i, kind, previousQty, requestedQty);
-
-    // Let the browser paint the pending popup before starting fetch()/Apps Script.
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const clientStarted = performance.now();
-      api(cfg.action, payload).then(result => {
-        const newQty = Number(result && result.qty);
-        if (!Number.isFinite(newQty)) throw new Error('The server saved the movement but did not return a valid balance. Check inventory before retrying.');
-        const updated = { ...i, Quantity: newQty };
-        const min = Number(updated.MinStock) || 0;
-        updated.st = newQty <= 0 ? 'OUT' : newQty <= min ? 'LOW' : 'IN';
-        const index = S.items.findIndex(x => x.ItemID === i.ItemID);
-        if (index >= 0) S.items[index] = updated;
-        S.loaded = false;
-        console.info('[HEIMS stock movement]', cfg.action, 'client round-trip ms:', Math.round(performance.now() - clientStarted));
-        renderQRMoveStatus(pending, updated, kind, 'success');
-      }).catch(error => {
-        const uncertain = /timed out|cannot reach server|failed to fetch|networkerror/i.test(String(error && error.message));
-        if (uncertain) S.loaded = false;
-        console.error('[HEIMS stock movement]', cfg.action, error);
-        renderQRMoveStatus(pending, i, kind, uncertain ? 'uncertain' : 'error', error && error.message);
-      });
-    }));
-  };
-
-  modal(cfg.title, `${summary}${helper}<div class="fg">${fields}</div>`, `Confirm ${cfg.title}`,
-    async () => {}, 'qr-move-overlay', beginMovement);
-
-}
-
-function showQRMovePending(item, kind, previousQty, requestedQty) {
-  const overlay = document.createElement('div');
-  overlay.className = 'ov qr-move-success-overlay';
-  const projected = kind === 'in' ? previousQty + requestedQty : previousQty - requestedQty;
-  overlay.innerHTML = `<section class="card qr-move-success qr-move-pending" role="status" aria-live="polite">
-    <div class="qr-pending-spinner" aria-hidden="true"></div>
-    <span class="qr-success-kicker">${kind === 'in' ? 'STOCK IN' : 'STOCK OUT'}</span>
-    <h3>Request received</h3>
-    <p class="mut sm">${esc(item.Name)} · ${esc(item.ItemID)}</p>
-    <div class="qr-success-balance"><small>Projected balance · pending confirmation</small><strong>${esc(projected)} ${esc(item.Unit || '')}</strong><span>${esc(item.Rack || 'No rack assigned')}</span></div>
-    <p class="mut sm">Saving stock movement securely in the background…</p>
-  </section>`;
-  document.body.append(overlay);
-  return overlay;
-}
-
-function renderQRMoveStatus(overlay, item, kind, state, message = '') {
-  if (!overlay || !overlay.isConnected) return;
-  const isIn = kind === 'in';
-  const balance = item.Quantity === '' || item.Quantity == null
-    ? 'Unavailable'
-    : `${esc(item.Quantity)} ${esc(item.Unit || '')}`;
-  if (state === 'success') {
-    overlay.innerHTML = `<section class="card qr-move-success" role="dialog" aria-modal="true" aria-label="${isIn ? 'Stock In successful' : 'Stock Out successful'}">
-      <button class="btn g sm qr-success-close" type="button" data-success-close aria-label="Close">✕</button>
-      <div class="qr-success-mark" aria-hidden="true"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="27"></circle><path d="m19 33 9 9 18-20"></path></svg></div>
-      <span class="qr-success-kicker">${isIn ? 'STOCK IN' : 'STOCK OUT'}</span>
-      <h3>${isIn ? 'Stock In Successfully!' : 'Stock Out Successfully!'}</h3>
-      <p class="mut sm">${esc(item.Name)} · ${esc(item.ItemID)}</p>
-      <div class="qr-success-balance"><small>Confirmed current stock balance</small><strong>${balance}</strong><span>${esc(item.Rack || 'No rack assigned')}</span></div>
-      <p class="mut sm">Google Sheets confirmed the stock movement.</p>
-      <button class="btn qr-success-done" type="button" data-success-close>Done</button>
-    </section>`;
-    const close = () => {
-      overlay.remove();
-      const latest = S.items.find(x => x.ItemID === item.ItemID);
-      if (latest) showQRItemResult(latest);
-    };
-    overlay.addEventListener('click', e => {
-      if (e.target === overlay || e.target.closest('[data-success-close]')) close();
-    }, { once: false });
-  } else {
-    const title = state === 'uncertain' ? 'Status not confirmed' : `${isIn ? 'Stock In' : 'Stock Out'} not completed`;
-    const detail = state === 'uncertain'
-      ? 'The connection was interrupted. The server may still have processed this request. Check the item balance or transaction history before trying again.'
-      : (message || 'The server rejected this stock movement.');
-    overlay.innerHTML = `<section class="card qr-move-success qr-move-error" role="alert">
-      <div class="qr-error-mark" aria-hidden="true">!</div>
-      <span class="qr-success-kicker">${isIn ? 'STOCK IN' : 'STOCK OUT'}</span>
-      <h3>${esc(title)}</h3>
-      <p class="mut sm">${esc(item.Name)} · ${esc(item.ItemID)}</p>
-      <p class="qr-move-error-message">${esc(detail)}</p>
-      <button class="btn qr-success-done" type="button" data-success-close>Close</button>
-    </section>`;
-    overlay.addEventListener('click', e => {
-      if (e.target === overlay || e.target.closest('[data-success-close]')) overlay.remove();
-    });
-  }
+  const fields = fld('newQty', 'New verified quantity *', '', 'type="number" min="0" step="any" required') + fld('reason', 'Reason for adjustment *', '', 'required maxlength="300"');
+  modalBg('Stock Adjustment', `${summary}<p class="mut sm">Adjustment sets the new actual stock balance. Use only after physically checking the quantity.</p><div class="fg">${fields}</div>`,
+    'Confirm Stock Adjustment', 'Saving stock adjustment…', d => api('adjustStock', { ...d, itemId: i.ItemID, rid: rid() }),
+    { cls: 'qr-move-overlay', ok: 'Stock adjustment saved', fail: 'Stock adjustment failed', after: async () => {
+      await load(true); delete QS_CACHE[i.ItemID];
+      const latest = S.items.find(x => x.ItemID === i.ItemID); if (latest && isOn('qrscanner')) showQRItemResult(latest);
+    } });
 }
 
 function drawQRSearch() {

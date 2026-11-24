@@ -131,12 +131,14 @@ document.addEventListener('click', e => {
   if (b.id === 'report-print') window.print();
   if (b.id === 'report-csv') csv('manager-low-stock-ordered-report', ['ItemID','Item','Rack','CurrentQty','Unit','MinQty','StockStatus','OrderStatus'], REPORT_ROWS.map(i => [i.ItemID,i.Name,i.Rack,i.Quantity,i.Unit,i.MinStock,ST[i.st][0],isItemOrdered(i)?'ORDERED':'']));
   if (b.dataset.rack) { S.rack = b.dataset.rack; drawRacks(); }
-  if (b.id === 'addloc') modal('Add location', fld('name', 'Location name *', '', 'required placeholder="Rack 4,1"') + fld('description', 'Description'), 'Add location',
-    async d => { await api('addLocation', { ...d, rid: rid() }); toast('Location added'); await vRacks(); });
+  if (b.id === 'addloc') modalBg('Add location', fld('name', 'Location name *', '', 'required placeholder="Rack 4,1"') + fld('description', 'Description'), 'Add location', 'Adding location…',
+    d => api('addLocation', { ...d, rid: rid() }), { ok: 'Location added', fail: 'Could not add location', after: async () => { await load(true); if (isOn('racks')) drawRacks(); } });
   if (b.id === 'rk-move') {
     const ids = [...document.querySelectorAll('.rk-chk:checked')].map(c => c.value);
     if (!ids.length) return toast('Select items first', 'bad');
     b.disabled = true;
-    api('transferItems', { itemIds: ids, toRack: $('#rk-to').value, rid: rid() }).then(async r => { toast(r.moved + ' item(s) moved'); await load(true); drawRacks(); }).catch(x => { toast(x.message, 'bad'); b.disabled = false; });
+    const toRack = $('#rk-to').value;
+    bg('Moving items…', () => api('transferItems', { itemIds: ids, toRack, rid: rid() }),
+      { ok: r => r.moved + ' item(s) moved', fail: 'Move failed', onError: () => b.disabled = false, after: async () => { await load(true); if (isOn('racks')) drawRacks(); } });
   }
 });

@@ -23,6 +23,34 @@ function modal(title, body, okText, onOk, extraClass = '', onStart = null) {
     try { await onOk(values); m.remove(); } catch (x) { er.textContent = x.message; b.disabled = false; }
   };
 }
+/* ---------- Standard loading / background-save helpers (used by EVERY action) ---------- */
+const isOn = h => location.hash.replace('#', '') === h;
+const loadingHTML = (t = 'Loading…') => `<div class="load"><i></i>${t}</div>`;
+// bg(): shows one consistent pending toast, runs the task in the background (UI stays usable),
+// then turns the same toast into a success / failure message. Never blocks the screen.
+//   o.ok    text or fn(result)  - success message
+//   o.fail  text                - failure prefix
+//   o.after fn(result)          - silent refresh after success (redraw table, reload list...)
+//   o.onError fn(err)           - re-enable buttons etc.
+function bg(label, task, o = {}) {
+  const t = toast(label, 'pending', 0);
+  const finish = (cls, msg, ms) => { t.className = 'toast ' + cls; t.textContent = msg; setTimeout(() => t.remove(), ms); };
+  return new Promise(resolve => requestAnimationFrame(() => {   // let the pending toast paint first
+    Promise.resolve().then(task).then(r => {
+      finish('', typeof o.ok === 'function' ? o.ok(r) : (o.ok || 'Saved'), 3500);
+      Promise.resolve(o.after && o.after(r)).catch(() => {}).finally(() => resolve(r));
+    }).catch(err => {
+      finish('bad', (o.fail || 'Failed') + ': ' + ((err && err.message) || 'Please try again.'), 6000);
+      try { o.onError && o.onError(err); } catch (_) {}
+      resolve(undefined);
+    });
+  }));
+}
+// modalBg(): form closes instantly, save continues in the background.
+// o.validate(values) may throw -> error shows inside the form and it stays open.
+function modalBg(title, body, okText, label, run, o = {}) {
+  modal(title, body, okText, async () => {}, o.cls || '', values => { if (o.validate) o.validate(values); bg(label, () => run(values), o); });
+}
 const fld = (n, l, v = '', x = '') => `<div><label>${l}</label><input name="${n}" value="${esc(v)}" ${x}></div>`;
 const sel = (n, l, a, v) => `<div><label>${l}</label><select name="${n}" required>${a.map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></div>`;
 
@@ -59,48 +87,32 @@ function itemForm(it) {
     e ? 'Save changes' : 'Add item', async () => {}, '', d => {
       const photoData = PIC.data;
       PIC.data = null;
-      const pending = toast('Saving changes…', 'pending', 0);
       const requestId = rid();
-      requestAnimationFrame(() => {
-        (async () => {
-          if (photoData) d.imageUrl = (await api('uploadImage', { data: photoData, rid: rid() })).url;
-          const action = e ? (admin ? 'adminUpdateItem' : 'editItem') : 'addItem';
-          const result = await api(action, { ...d, itemId: it.ItemID, rid: requestId });
-          if (e && result && result.item) {
-            const index = S.items.findIndex(x => x.ItemID === it.ItemID);
-            if (index >= 0) {
-              const merged = { ...S.items[index], ...result.item };
-              const min = Number(merged.MinStock) || 0;
-              merged.st = merged.Quantity === '' || merged.Quantity == null
-                ? 'UNVERIFIED'
-                : Number(merged.Quantity) <= 0 ? 'OUT'
-                  : Number(merged.Quantity) <= min ? 'LOW' : 'IN';
-              S.items[index] = merged;
-            }
-            S.loaded = true;
-            if (location.hash.replace('#', '') === 'inventory') drawTable();
-          } else {
-            S.loaded = false;
-            if (location.hash.replace('#', '') === 'inventory') {
-              await load(true);
-              drawTable();
-            }
+      bg(e ? 'Saving changes…' : 'Adding item…', async () => {
+        if (photoData) d.imageUrl = (await api('uploadImage', { data: photoData, rid: rid() })).url;
+        const action = e ? (admin ? 'adminUpdateItem' : 'editItem') : 'addItem';
+        return api(action, { ...d, itemId: it.ItemID, rid: requestId });
+      }, { ok: e ? 'Changes saved successfully' : 'Item added successfully', fail: 'Save failed', after: async result => {
+        if (e && result && result.item) {
+          const index = S.items.findIndex(x => x.ItemID === it.ItemID);
+          if (index >= 0) {
+            const merged = { ...S.items[index], ...result.item };
+            const min = Number(merged.MinStock) || 0;
+            merged.st = merged.Quantity === '' || merged.Quantity == null ? 'UNVERIFIED'
+              : Number(merged.Quantity) <= 0 ? 'OUT' : Number(merged.Quantity) <= min ? 'LOW' : 'IN';
+            S.items[index] = merged;
           }
-          pending.className = 'toast';
-          pending.textContent = e ? 'Changes saved successfully' : 'Item added successfully';
-          setTimeout(() => pending.remove(), 3500);
-        })().catch(error => {
-          pending.className = 'toast bad';
-          pending.textContent = `Save failed: ${error.message || 'Please try again.'}`;
-          setTimeout(() => pending.remove(), 6000);
-        });
-      });
+          S.loaded = true;
+        } else { S.loaded = false; await load(true); }
+        if (isOn('inventory')) drawTable();
+      } });
     });
 }
 function archive(id) {
   const it = S.items.find(i => i.ItemID === id);
-  modal('Archive item', `<p>Archive <b>${esc(it.Name)}</b>? It leaves active inventory but its history is kept.</p>${fld('reason', 'Reason *', '', 'required')}`,
-    'Archive', async d => { await api('archiveItem', { itemId: id, reason: d.reason, rid: rid() }); toast('Item archived'); await load(true); drawTable(); });
+  modalBg('Archive item', `<p>Archive <b>${esc(it.Name)}</b>? It leaves active inventory but its history is kept.</p>${fld('reason', 'Reason *', '', 'required')}`,
+    'Archive', 'Archiving item…', d => api('archiveItem', { itemId: id, reason: d.reason, rid: rid() }),
+    { ok: 'Item archived', fail: 'Archive failed', after: async () => { await load(true); if (isOn('inventory')) drawTable(); } });
 }
 document.addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
@@ -116,14 +128,13 @@ document.addEventListener('click', e => {
 
 async function toggleArch(b) {
   S.showArch = !S.showArch; b.textContent = S.showArch ? 'Show active' : 'Show archived'; S.page = 1;
-  if (S.showArch) { try { S.archived = (await api('inventory', { archived: true })).items; } catch (e) { toast(e.message, 'bad'); S.showArch = false; b.textContent = 'Show archived'; } }
+  if (S.showArch) { $('#tbl').innerHTML = loadingHTML('Loading archived items…'); try { S.archived = (await api('inventory', { archived: true })).items; } catch (e) { toast(e.message, 'bad'); S.showArch = false; b.textContent = 'Show archived'; } }
   const bulkBtn = document.getElementById('bulk-qr-open'); if (bulkBtn) bulkBtn.hidden = S.showArch;
   drawTable();
 }
 function restore(id) {
   const it = S.archived.find(i => i.ItemID === id);
-  modal('Restore item', `<p>Restore <b>${esc(it.Name)}</b> to active inventory?</p>`, 'Restore', async () => {
-    await api('restoreItem', { itemId: id, rid: rid() }); toast('Item restored');
-    S.archived = S.archived.filter(i => i.ItemID !== id); await load(true); drawTable();
-  });
+  modalBg('Restore item', `<p>Restore <b>${esc(it.Name)}</b> to active inventory?</p>`, 'Restore', 'Restoring item…',
+    () => api('restoreItem', { itemId: id, rid: rid() }),
+    { ok: 'Item restored', fail: 'Restore failed', after: async () => { S.archived = S.archived.filter(i => i.ItemID !== id); await load(true); if (isOn('inventory')) drawTable(); } });
 }

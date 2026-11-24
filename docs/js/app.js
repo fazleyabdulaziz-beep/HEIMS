@@ -117,20 +117,12 @@ async function toggleItemOrdered(itemId, wasOrdered) {
   if (!can('ADMIN', 'SUPERVISOR')) return toast('Only Admin or Supervisor can update the order label.', 'bad');
   const item = S.items.find(i => i.ItemID === itemId);
   if (!item) return toast('Item not found. Refresh inventory and try again.', 'bad');
-  const next = !wasOrdered, pending = toast(next ? 'Marking item as ordered…' : 'Removing ordered label…', 'pending', 0);
-  try {
+  const next = !wasOrdered;
+  bg(next ? 'Marking item as ordered…' : 'Removing ordered label…', async () => {
     const result = await api('setItemOrdered', { itemId, ordered: next, rid: rid() });
     item.Ordered = !!result.ordered;
-    pending.className = 'toast';
-    pending.textContent = next ? 'Item marked as ORDERED' : 'ORDERED label removed';
-    if (location.hash === '#inventory') drawTable();
-    if (location.hash === '#reports') drawReport();
-    setTimeout(() => pending.remove(), 3500);
-  } catch (error) {
-    pending.className = 'toast bad';
-    pending.textContent = 'Could not update order label: ' + (error.message || 'Please try again.');
-    setTimeout(() => pending.remove(), 6000);
-  }
+  }, { ok: next ? 'Item marked as ORDERED' : 'ORDERED label removed', fail: 'Could not update order label',
+       after: () => { if (isOn('inventory')) drawTable(); if (isOn('reports')) drawReport(); } });
 }
 
 /* ---------- Router & events ---------- */
@@ -140,7 +132,7 @@ async function route() {
   let k = (location.hash || '#dashboard').slice(1); if (!V[k]) k = 'dashboard';
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.hash === '#' + k));
   moveInd(); $('#title').textContent = V[k][0]; $('#side').classList.remove('open');
-  $('#view').innerHTML = '<div class="load"><i></i>Loading…</div>';
+  $('#view').innerHTML = loadingHTML();
   try { await V[k][1](); } catch (e) { $('#view').innerHTML = `<div class="card empty">${esc(e.message)}<br><br><button class="btn" id="retry">Retry</button></div>`; }
 }
 

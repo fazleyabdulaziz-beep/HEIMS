@@ -28,21 +28,24 @@ const statusSel = a => `<div><label>Status</label><select name="active"><option 
 
 document.addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
-  const d = b.dataset, done = async () => { await vSettings(); };
-  if (b.id === 'addcat') modal('Add category', fld('name', 'Category name *', '', 'required'), 'Add', async x => { await api('addCategory', { ...x, rid: rid() }); toast('Category added'); await vCats(); });
-  if (d.cat) modal('Rename category', fld('name', 'New name *', d.cat, 'required') + '<p class="mut">All items in this category are updated.</p>', 'Rename', async x => { await api('renameCategory', { from: d.cat, name: x.name, rid: rid() }); toast('Category renamed'); await vCats(); });
+  const d = b.dataset, done = async () => { if (isOn('settings')) await vSettings(); };
+  const refreshCats = async () => { await load(true); if (isOn('categories')) await vCats(); };
+  if (b.id === 'addcat') modalBg('Add category', fld('name', 'Category name *', '', 'required'), 'Add', 'Adding category…', x => api('addCategory', { ...x, rid: rid() }), { ok: 'Category added', fail: 'Could not add category', after: refreshCats });
+  if (d.cat) modalBg('Rename category', fld('name', 'New name *', d.cat, 'required') + '<p class="mut">All items in this category are updated.</p>', 'Rename', 'Renaming category…', x => api('renameCategory', { from: d.cat, name: x.name, rid: rid() }), { ok: 'Category renamed', fail: 'Rename failed', after: refreshCats });
   if (d.catf) { S.f = { q: '', cat: d.catf, rack: '', st: '', brand: '', sort: 'name' }; location.hash = '#inventory'; }
-  if (b.id === 'pwbtn') modal('Change password', pw('current', 'Current password *').replace(' minlength=8', '') + pw('next', 'New password * (min 8 characters)') + pw('again', 'Repeat new password *'), 'Change password', async x => {
-    if (x.next !== x.again) throw new Error('New passwords do not match');
-    await api('changePassword', { current: x.current, next: x.next, rid: rid() }); toast('Password changed'); });
-  if (b.id === 'savesett') api('saveSettings', { HOTEL_NAME: $('[name=hn]').value, RECENT_DAYS: $('[name=rd]').value, rid: rid() }).then(() => { sessionStorage.hotel = $('[name=hn]').value; $('#hotel').textContent = sessionStorage.hotel; toast('Settings saved'); }).catch(x => toast(x.message, 'bad'));
-  if (b.id === 'adduser') modal('Add user', `<div class="fg">${fld('username', 'Username *', '', 'required pattern="[A-Za-z0-9._\\-]{3,30}"')}${fld('name', 'Full name *', '', 'required')}${sel('role', 'Role *', ROLES, 'TECHNICIAN')}${pw('password', 'Temporary password *')}</div>`, 'Create user',
-    async x => { await api('saveUser', { ...x, rid: rid() }); toast('User created'); await done(); });
+  if (b.id === 'pwbtn') modalBg('Change password', pw('current', 'Current password *').replace(' minlength=8', '') + pw('next', 'New password * (min 8 characters)') + pw('again', 'Repeat new password *'), 'Change password', 'Changing password…',
+    x => api('changePassword', { current: x.current, next: x.next, rid: rid() }),
+    { ok: 'Password changed', fail: 'Could not change password', validate: x => { if (x.next !== x.again) throw new Error('New passwords do not match'); } });
+  if (b.id === 'savesett') { const hotel = $('[name=hn]').value, days = $('[name=rd]').value; b.disabled = true;
+    bg('Saving settings…', () => api('saveSettings', { HOTEL_NAME: hotel, RECENT_DAYS: days, rid: rid() }),
+      { ok: 'Settings saved', fail: 'Could not save settings', onError: () => b.disabled = false, after: () => { b.disabled = false; sessionStorage.hotel = hotel; $('#hotel').textContent = hotel; } }); }
+  if (b.id === 'adduser') modalBg('Add user', `<div class="fg">${fld('username', 'Username *', '', 'required pattern="[A-Za-z0-9._\\-]{3,30}"')}${fld('name', 'Full name *', '', 'required')}${sel('role', 'Role *', ROLES, 'TECHNICIAN')}${pw('password', 'Temporary password *')}</div>`, 'Create user', 'Creating user…',
+    x => api('saveUser', { ...x, rid: rid() }), { ok: 'User created', fail: 'Could not create user', after: done });
   if (d.uedit) { const x = USERS.find(v => v.username === d.uedit);
-    modal('Edit ' + esc(x.username), `<div class="fg">${fld('name', 'Full name *', x.name, 'required')}${sel('role', 'Role *', ROLES, x.role)}${statusSel(x.active)}</div>`, 'Save',
-      async v => { await api('saveUser', { ...v, username: x.username, edit: true, rid: rid() }); toast('User updated'); await done(); }); }
-  if (d.ureset) modal('Reset password: ' + esc(d.ureset), pw('password', 'New temporary password *') + '<p class="mut">Tell the user to change it after signing in.</p>', 'Reset',
-    async v => { await api('resetPassword', { username: d.ureset, password: v.password, rid: rid() }); toast('Password reset'); });
+    modalBg('Edit ' + esc(x.username), `<div class="fg">${fld('name', 'Full name *', x.name, 'required')}${sel('role', 'Role *', ROLES, x.role)}${statusSel(x.active)}</div>`, 'Save', 'Updating user…',
+      v => api('saveUser', { ...v, username: x.username, edit: true, rid: rid() }), { ok: 'User updated', fail: 'Could not update user', after: done }); }
+  if (d.ureset) modalBg('Reset password: ' + esc(d.ureset), pw('password', 'New temporary password *') + '<p class="mut">Tell the user to change it after signing in.</p>', 'Reset', 'Resetting password…',
+    v => api('resetPassword', { username: d.ureset, password: v.password, rid: rid() }), { ok: 'Password reset', fail: 'Could not reset password' });
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelector('.ov:last-of-type')?.remove(); });
 
