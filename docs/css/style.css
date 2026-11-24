@@ -267,3 +267,9 @@ tbody tr{transition:background .2s,box-shadow .2s}tbody tr:hover{background:colo
 .qs-hint{margin:-4px 0 0;text-align:center}
 @media(max-width:380px){.qs-fields{grid-template-columns:1fr}.qs-btn{width:64px;height:64px}.qs-num strong{font-size:40px}}
 @media(max-width:760px){.qr-found-modal .qr-item-photo{height:140px}}
+
+/* − / + draft + confirm */
+.qs-draft{margin-top:8px;font-weight:600;font-variant-numeric:tabular-nums}.qs-draft.in{color:var(--ok)}.qs-draft.out{color:var(--bad)}
+.qs-confirm-row{display:flex;gap:8px}.qs-confirm-row .btn{min-height:48px}.qs-confirm{flex:1}
+.qs-confirm.out{background:var(--bad);border-color:var(--bad);color:#fff}
+.qs-confirm:disabled,.qs-confirm-row .btn:disabled{opacity:.4;cursor:not-allowed}

@@ -107,8 +107,7 @@ async function onQRDecoded(raw) {
 }
 
 function showQRItemResult(i) {
-  // Focused pop-up: identify the part by photo, then press − / + to move stock. The balance updates instantly
-  // and each tap is saved to Google Sheets in the background (queued in order, one request per tap).
+  // Focused pop-up: identify the part by photo, press − / + to build the change, then Confirm to save once (in the background).
   document.querySelectorAll('.qr-item-overlay').forEach(el => el.remove());
   const counted = i.Quantity !== '' && i.Quantity != null;
   const canMove = can('ADMIN', 'SUPERVISOR', 'TECHNICIAN');
@@ -119,18 +118,20 @@ function showQRItemResult(i) {
   const stepper = canMove && counted ? `
     <div class="qs" data-qs-root>
       <div class="qs-bal">
-        <small class="mut">Current balance</small>
+        <small class="mut" data-qs-label>Current balance</small>
         <div class="qs-row">
-          <button type="button" class="qs-btn out" data-qs="out" aria-label="Stock out (minus)">&minus;</button>
+          <button type="button" class="qs-btn out" data-qs="out" aria-label="Minus">&minus;</button>
           <div class="qs-num"><strong data-qs-num>${esc(i.Quantity)}</strong><span>${esc(i.Unit || '')}</span></div>
-          <button type="button" class="qs-btn in" data-qs="in" aria-label="Stock in (plus)">+</button>
+          <button type="button" class="qs-btn in" data-qs="in" aria-label="Plus">+</button>
         </div>
-        <div class="qs-status mut sm" data-qs-status aria-live="polite">Tap &minus; to take out · + to add in</div>
+        <div class="qs-draft sm" data-qs-draft>No change yet</div>
+        <div class="qs-status mut sm" data-qs-status aria-live="polite"></div>
       </div>
       <div class="qs-step" role="group" aria-label="Quantity per tap"><span class="mut sm">Per tap</span>${[1, 5, 10].map((n, k) => `<button type="button" class="qs-chip ${k ? '' : 'on'}" data-qs-step="${n}">${n}</button>`).join('')}</div>
       <div class="fg qs-fields"><div><label>Staff name / ID</label><input name="qs-staff" value="${esc(u.name || '')}" maxlength="80" autocomplete="off"></div>
         <div><label>Location used</label><input name="qs-dept" value="${esc(localStorage.qsDept || '')}" maxlength="80" placeholder="Room no. / area" autocomplete="off"></div></div>
-      <p class="mut sm qs-hint">Staff and location are needed for &minus; (Stock Out) only.</p>
+      <p class="mut sm qs-hint">Staff and location are needed for Stock Out (minus) only.</p>
+      <div class="qs-confirm-row"><button type="button" class="btn g" data-qs-reset disabled>Reset</button><button type="button" class="btn qs-confirm" data-qs-confirm disabled>Confirm</button></div>
     </div>` : '';
   const overlay = document.createElement('div');
   overlay.className = 'ov qr-item-overlay';
@@ -154,52 +155,68 @@ function showQRItemResult(i) {
   if (stepper) initQRStepper(overlay, i);
 }
 
-/* ---------- − / + stepper: instant balance, saved in the background ---------- */
-const QS_CACHE = {};   // itemId -> state, so reopening an item with saves still in flight shows the right balance
+/* ---------- − / + stepper: adjust freely on screen, press Confirm to save once ---------- */
+const QS_CACHE = {};   // itemId -> state, so reopening an item with a save still in flight shows the right balance
 function initQRStepper(overlay, item) {
   const id = item.ItemID, root = overlay.querySelector('[data-qs-root]');
-  const numEl = root.querySelector('[data-qs-num]'), statusEl = root.querySelector('[data-qs-status]'), badgeEl = overlay.querySelector('[data-qs-badge]');
-  const staffEl = root.querySelector('[name="qs-staff"]'), deptEl = root.querySelector('[name="qs-dept"]');
+  const q = sel => root.querySelector(sel);
+  const numEl = q('[data-qs-num]'), draftEl = q('[data-qs-draft]'), statusEl = q('[data-qs-status]'), labelEl = q('[data-qs-label]');
+  const badgeEl = overlay.querySelector('[data-qs-badge]'), confirmBtn = q('[data-qs-confirm]'), resetBtn = q('[data-qs-reset]');
+  const staffEl = q('[name="qs-staff"]'), deptEl = q('[name="qs-dept"]');
   const st = QS_CACHE[id] && QS_CACHE[id].inflight > 0 ? QS_CACHE[id]
-    : (QS_CACHE[id] = { confirmed: Number(item.Quantity) || 0, pending: 0, inflight: 0, step: 1, chain: Promise.resolve(), msg: '', msgCls: '' });
+    : (QS_CACHE[id] = { confirmed: Number(item.Quantity) || 0, pending: 0, draft: 0, inflight: 0, step: 1, chain: Promise.resolve(), msg: '', msgCls: '' });
   const round = n => Math.round(n * 100) / 100;
-  const shown = () => round(st.confirmed + st.pending);
-  const stOf = q => q <= 0 ? 'OUT' : q <= (Number(item.MinStock) || 0) ? 'LOW' : 'IN';
+  const base = () => round(st.confirmed + st.pending);          // balance incl. saves still in flight
+  const stOf = n => n <= 0 ? 'OUT' : n <= (Number(item.MinStock) || 0) ? 'LOW' : 'IN';
+  const fmt = n => (n > 0 ? '+' : '−') + Math.abs(n);
   function render() {
     if (!overlay.isConnected) return;
-    const q = shown(), s = stOf(q);
-    numEl.textContent = q; numEl.className = s === 'OUT' ? 'bad' : s === 'LOW' ? 'warn' : '';
+    const proj = round(base() + st.draft), s = stOf(proj);
+    numEl.textContent = proj; numEl.className = s === 'OUT' ? 'bad' : s === 'LOW' ? 'warn' : '';
     badgeEl.innerHTML = badge(s);
-    root.querySelector('[data-qs="out"]').disabled = q <= 0;
+    labelEl.textContent = st.draft ? 'New balance (not saved yet)' : 'Current balance';
+    draftEl.className = 'qs-draft sm ' + (st.draft > 0 ? 'in' : st.draft < 0 ? 'out' : 'mut');
+    draftEl.textContent = st.draft ? `Balance ${base()} → ${proj}  (${fmt(st.draft)})` : 'No change yet';
+    q('[data-qs="out"]').disabled = proj <= 0;
     root.querySelectorAll('[data-qs-step]').forEach(c => c.classList.toggle('on', Number(c.dataset.qsStep) === st.step));
+    confirmBtn.disabled = !st.draft; resetBtn.disabled = !st.draft;
+    confirmBtn.textContent = !st.draft ? 'Confirm' : st.draft > 0 ? `Confirm Stock In ${fmt(st.draft)}` : `Confirm Stock Out ${fmt(st.draft)}`;
+    confirmBtn.classList.toggle('out', st.draft < 0);
     statusEl.className = 'qs-status sm ' + (st.inflight ? 'mut' : st.msgCls || 'mut');
-    statusEl.innerHTML = st.inflight ? `<span class="qs-spin" aria-hidden="true"></span> Saving ${st.inflight > 1 ? st.inflight + ' changes' : 'change'}…` : esc(st.msg || 'Tap − to take out · + to add in');
+    statusEl.innerHTML = st.inflight ? `<span class="qs-spin" aria-hidden="true"></span> Saving ${st.inflight > 1 ? st.inflight + ' changes' : 'change'} in background…` : esc(st.msg);
   }
   function syncLocal(qty) {
     const idx = S.items.findIndex(x => x.ItemID === id);
     if (idx >= 0) S.items[idx] = { ...S.items[idx], Quantity: qty, st: stOf(qty) };
   }
-  function tap(kind) {
-    const step = st.step, delta = kind === 'in' ? step : -step;
+  function tap(kind) {                                          // local only: no network, always instant
+    const next = round(st.draft + (kind === 'in' ? st.step : -st.step));
+    if (base() + next < 0) { st.msg = `Not enough stock — only ${base()} available.`; st.msgCls = 'bad'; render(); try { navigator.vibrate && navigator.vibrate(60); } catch (_) {} return; }
+    st.draft = next; st.msg = ''; st.msgCls = '';
+    try { navigator.vibrate && navigator.vibrate(10); } catch (_) {}
+    render();
+  }
+  function confirm() {
+    const delta = st.draft; if (!delta) return;
+    const kind = delta > 0 ? 'in' : 'out', qty = Math.abs(delta);
     const staff = staffEl.value.trim(), dept = deptEl.value.trim();
     if (kind === 'out') {
       [[staffEl, staff], [deptEl, dept]].forEach(([el, v]) => el.classList.toggle('need', !v));
-      if (!staff || !dept) { st.msg = !staff ? 'Enter staff name / ID first.' : 'Enter the location used first.'; st.msgCls = 'bad'; render(); (!staff ? staffEl : deptEl).focus(); return; }
-      if (shown() + delta < 0) { st.msg = `Not enough stock — only ${shown()} left.`; st.msgCls = 'bad'; render(); try { navigator.vibrate && navigator.vibrate(60); } catch (_) {} return; }
+      if (!staff || !dept) { st.msg = !staff ? 'Enter staff name / ID before confirming Stock Out.' : 'Enter the location used before confirming Stock Out.'; st.msgCls = 'bad'; render(); (!staff ? staffEl : deptEl).focus(); return; }
       try { localStorage.qsDept = dept; } catch (_) {}
     }
-    try { navigator.vibrate && navigator.vibrate(15); } catch (_) {}
-    st.pending = round(st.pending + delta); st.inflight++; st.msg = ''; st.msgCls = '';
-    render();                                                   // balance changes immediately
-    const payload = { itemId: id, qty: step, rid: rid(), remarks: '', ...(kind === 'out' ? { staff, dept } : {}) };
+    st.draft = 0; st.pending = round(st.pending + delta); st.inflight++; st.msg = ''; st.msgCls = '';
+    try { qrSuccessFeedback(); } catch (_) {}
+    render();                                                   // new balance shows immediately; save runs in background
+    const payload = { itemId: id, qty, rid: rid(), remarks: '', ...(kind === 'out' ? { staff, dept } : {}) };
     const action = kind === 'in' ? 'stockIn' : 'stockOut';
-    st.chain = st.chain.then(async () => {                      // one-at-a-time, in tap order
+    st.chain = st.chain.then(async () => {
       try {
-        const r = await api(action, payload), q = Number(r && r.qty);
-        if (!Number.isFinite(q)) throw new Error('Saved, but the server returned no balance. Check inventory.');
-        st.pending = round(st.pending - delta); st.confirmed = q; st.inflight--;
-        syncLocal(shown());
-        st.msg = st.inflight ? '' : `Saved ✓ ${kind === 'in' ? '+' : '−'}${step} · balance confirmed`; st.msgCls = 'ok';
+        const r = await api(action, payload), n = Number(r && r.qty);
+        if (!Number.isFinite(n)) throw new Error('Saved, but the server returned no balance. Check inventory.');
+        st.pending = round(st.pending - delta); st.confirmed = n; st.inflight--;
+        syncLocal(base());
+        st.msg = st.inflight ? '' : `Saved ✓ ${kind === 'in' ? 'Stock In' : 'Stock Out'} ${fmt(delta)} · balance confirmed`; st.msgCls = 'ok';
       } catch (err) {
         st.pending = round(st.pending - delta); st.inflight--;
         const uncertain = /timed out|cannot reach server|failed to fetch|networkerror/i.test(String(err && err.message));
@@ -214,6 +231,8 @@ function initQRStepper(overlay, item) {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.qs) tap(b.dataset.qs);
     if (b.dataset.qsStep) { st.step = Number(b.dataset.qsStep); render(); }
+    if (b.dataset.qsConfirm !== undefined) confirm();
+    if (b.dataset.qsReset !== undefined) { st.draft = 0; st.msg = ''; render(); }
   });
   [staffEl, deptEl].forEach(el => el.addEventListener('input', () => el.classList.remove('need')));
   st.render = render; render();

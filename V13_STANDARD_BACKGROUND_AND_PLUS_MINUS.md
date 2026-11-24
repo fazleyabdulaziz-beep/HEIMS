@@ -12,9 +12,10 @@
 
 ## 2. QR Stock In / Stock Out → − / + buttons
 - After scanning (or searching) an item, the popup shows the live balance with a big − and + button.
-- Tap + = Stock In, tap − = Stock Out. The balance changes instantly; each tap is saved in the background.
-- Taps are queued and sent in order (one request per tap, each with its own request ID). Status line shows
-  "Saving…" then "Saved ✓ … balance confirmed" using the balance returned by the server.
+- Tap + / − to build the change. Taps are screen-only (no server request), so they are instant. A preview shows
+  "Balance 5 → 7 (+2)".
+- Press **Confirm Stock In / Confirm Stock Out** to save ONE combined request in the background. **Reset** clears the draft.
+  Status line shows "Saving…" then "Saved ✓ … balance confirmed" using the balance returned by the server.
 - "Per tap" chips: 1 / 5 / 10.
 - − needs Staff name (pre-filled with the logged-in user) and Location used (remembered on the device).
 - Over-withdrawing is blocked on screen and again by the server; failures show an error and roll the balance back.
